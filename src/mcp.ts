@@ -66,7 +66,7 @@ export function createMcpServer(client = new BuiltIndieClient()): McpServer {
   )
   server.tool(
     'claim_product',
-    'Claim a listing for its domain owner (needs BUILTINDIE_KEY). Returns the DNS TXT record to add; call again once it is in DNS and claimed comes back true.',
+    'Claim a listing for its domain owner (needs BUILTINDIE_KEY). Returns the DNS TXT record to add, plus `markdown`: step-by-step instructions for whoever has DNS access. Call again once it is in DNS and claimed comes back true.',
     { slug },
     wrap((a: { slug: string }) => client.claim(a.slug)),
   )

@@ -241,6 +241,15 @@ describe('the site', () => {
     const claimPage = await (await call('/p/acme/claim', authed())).text()
     const value = claimPage.match(new RegExp(`${CLAIM_PREFIX}[\\w-]+`))![0]
     expect(claimPage).toContain('_built-indie.acme.test')
+    expect(claimPage).toContain('Copy as Markdown for AI')
+    expect((await call('/p/acme/claim.md')).headers.get('location')).toBe('/login?next=%2Fp%2Facme%2Fclaim.md')
+    const md = await call('/p/acme/claim.md', authed())
+    expect(md.headers.get('content-type')).toContain('text/markdown')
+    const mdText = await md.text()
+    expect(mdText).toContain('# Claim Acme on built.indie')
+    expect(mdText).toContain(`| Value / content | \`${value}\` |`)
+    expect(mdText).toContain('dig +short TXT _built-indie.acme.test @1.1.1.1')
+    expect(mdText).toContain('builtindie claim acme')
     expect(await (await call('/p/acme/claim', authed(form({})))).text()).toContain('did not find the record')
     txt['_built-indie.acme.test'] = [[value]]
     expect(await (await call('/p/acme/claim', authed(form({})))).text()).toContain('is yours ✓')

@@ -330,8 +330,52 @@ ${d.error ? `<p class="note error" role="alert">${esc(d.error.message)}</p>` : '
   })
 }
 
+/**
+ * The claim as Markdown: a prompt to hand an AI agent (or a person) that has
+ * access to the domain's DNS. Everything it needs is in it: the exact record,
+ * where it goes, how to check it took, and how to finish the claim.
+ */
+export function claimMarkdown(origin: string, p: Product, record: { name: string; value: string }): string {
+  const bare = p.domain.replace(/^www\./, '')
+  const label = record.name.slice(0, -(bare.length + 1))
+  return `# Claim ${p.name} on built.indie: add one DNS TXT record
+
+Prove control of \`${bare}\` so the listing ${origin}/p/${p.slug} can be claimed and edited.
+
+## The record
+
+| Field | Value |
+| --- | --- |
+| Type | \`TXT\` |
+| Name / host | \`${record.name}\` (many DNS hosts want only \`${label}\`, relative to the zone) |
+| Value / content | \`${record.value}\` |
+| TTL | 300, or the host's default |
+
+The same TXT value on \`${bare}\` itself also works, if a \`${label}\` name is not possible.
+
+## Steps
+
+1. Find the DNS zone that serves \`${bare}\`. It is the zone of the registered domain (for \`a.b.example.com\` that is usually \`example.com\`): check with \`dig +short NS ${bare}\`.
+2. In that zone, add the TXT record above. Add it; do not replace or delete any existing TXT records (SPF, DKIM, other verifications).
+3. Wait for it to be served, then check it from public resolvers (built.indie asks 1.1.1.1 and 9.9.9.9):
+
+   \`\`\`sh
+   dig +short TXT ${record.name} @1.1.1.1
+   # expect: "${record.value}"
+   \`\`\`
+
+4. Finish the claim, any one of:
+   - open ${origin}/p/${p.slug}/claim (signed in as the same account) and press **Check DNS**
+   - \`BUILTINDIE_KEY=bi_… builtindie claim ${p.slug}\`
+   - \`curl -X POST ${origin}/api/v1/products/${p.slug}/claim -H 'authorization: Bearer bi_…'\` (answers \`{"claimed": true}\`)
+
+The value is tied to one built.indie account: a record made for another account will not claim it for this one. The record can be removed once the claim succeeds.
+`
+}
+
 export function claimPage(ctx: Ctx, d: { product: Product; record: { name: string; value: string }; owner: boolean; result?: { ok: boolean; looked: string[] } }): string {
   const p = d.product
+  const md = claimMarkdown(ctx.origin, p, d.record)
   const done = d.owner || d.result?.ok
   return layout({
     ctx,
@@ -351,6 +395,12 @@ ${d.result && !d.result.ok ? `<p class="note error" role="alert">We did not find
   <p class="small muted">Value</p><div class="address"><code>${esc(d.record.value)}</code><button class="copy" data-copy="${esc(d.record.value)}">Copy</button></div>
   <p class="small muted">A TXT record on ${esc(p.domain.replace(/^www\./, ''))} itself with the same value works too. You can remove it once claimed.</p>
   <form method="post" action="/p/${esc(p.slug)}/claim" data-busy="Asking DNS…"><button class="btn">Check DNS</button></form>
+</div>
+<div class="card">
+  <h2 class="mini-h">${icon('terminal')} Have an AI do the DNS</h2>
+  <p class="muted small">Copy these instructions as Markdown and paste them to an agent (or a person) with access to your DNS. They hold your record, how to check it, and how to finish the claim.</p>
+  <div class="row"><button class="chip" data-copy="${esc(md)}">Copy as Markdown for AI</button><a class="chip" href="/p/${esc(p.slug)}/claim.md">Open as .md</a></div>
+  <details><summary class="small">Preview</summary><pre><code>${esc(md)}</code></pre></details>
 </div>`}`,
   })
 }
