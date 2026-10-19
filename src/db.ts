@@ -152,6 +152,13 @@ export class Store {
         accounts TEXT NOT NULL DEFAULT '[]',
         created_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS badge_ids (
+        id TEXT PRIMARY KEY,
+        product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at INTEGER NOT NULL,
+        UNIQUE (product_id, user_id)
+      );
       CREATE TABLE IF NOT EXISTS payments (
         ref TEXT PRIMARY KEY,
         product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
@@ -245,6 +252,21 @@ export class Store {
 
   claim(id: string, userId: string, now = Date.now()): void {
     this.db.query('UPDATE products SET owner_id = ?, claimed_at = ?, updated_at = ? WHERE id = ?').run(userId, now, now, id)
+  }
+
+  /**
+   * The badge id for this account on this listing: opaque, URL-safe, 16 chars, made
+   * once and handed back every time after, so a badge placed yesterday still counts.
+   */
+  badgeId(productId: string, userId: string, now = Date.now()): string {
+    this.db.query('INSERT OR IGNORE INTO badge_ids (id, product_id, user_id, created_at) VALUES (?, ?, ?, ?)').run(newId(12), productId, userId, now)
+    return (this.db.query('SELECT id FROM badge_ids WHERE product_id = ? AND user_id = ?').get(productId, userId) as { id: string }).id
+  }
+
+  /** Whose badge id this is: the listing and the account it was made for. */
+  badge(id: string): { productId: string; userId: string } | null {
+    const row = this.db.query('SELECT product_id, user_id FROM badge_ids WHERE id = ?').get(id) as { product_id: string; user_id: string } | null
+    return row ? { productId: row.product_id, userId: row.user_id } : null
   }
 
   /** Everything a person owns or submitted, newest first. */

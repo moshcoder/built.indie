@@ -135,8 +135,9 @@ export class BuiltIndie {
   /**
    * Two proofs, either one claims it: the TXT record at _built-indie.<domain> (or on the
    * domain itself, and its apex for www), or, failing DNS, our badge on the homepage
-   * carrying this person's token (`/badge/<slug>.svg?claim=<token>`, or the bare
-   * `built-indie-verify=<token>` anywhere in the HTML, e.g. a meta tag). A badge that
+   * carrying this person's badge id (`/images.svg?id=<id>`, the easy way). Kept for
+   * badges already placed: `/badge/<slug>.svg?claim=<token>`, or the bare
+   * `built-indie-verify=<token>` anywhere in the HTML, e.g. a meta tag. A badge that
    * claims also earns the followed link and the ✓, as `verify` would.
    */
   async claim(p: Product, user: User): Promise<{ ok: boolean; looked: string[]; method?: 'dns' | 'badge' }> {
@@ -156,6 +157,15 @@ export class BuiltIndie {
       }
     }
     const html = await this.homepage(p)
+    const own = this.badgeIds(html).some((id) => {
+      const b = this.store.badge(id)
+      return b?.productId === p.id && b.userId === user.id
+    })
+    if (own) {
+      this.store.claim(p.id, user.id)
+      this.store.setVerified(p.id, Date.now())
+      return { ok: true, looked, method: 'badge' }
+    }
     if (this.hasClaimBadge(html, token)) {
       this.store.claim(p.id, user.id)
       if (this.linksBack(html)) this.store.setVerified(p.id, Date.now())
@@ -179,13 +189,24 @@ export class BuiltIndie {
     return new RegExp(`href=["']?https?://${this.ourHosts()}(/|["'])`, 'i').test(html)
   }
 
+  /** Every link or image URL in the page that points at our host. */
+  private ourUrls(html: string): string[] {
+    if (!html) return []
+    return [...html.matchAll(new RegExp(`(?:href|src)\\s*=\\s*["']?((?:https?:)?//${this.ourHosts()}/[^"'\\s>]*)`, 'gi'))].map((m) => m[1]!)
+  }
+
+  /** The ids of every `/images.svg?id=<id>` badge on our host in the page. */
+  badgeIds(html: string): string[] {
+    const ids = this.ourUrls(html).map((u) => u.match(/\/images\.svg\?(?:[^#]*?(?:&|&amp;))?id=([A-Za-z0-9_-]+)/)?.[1])
+    return [...new Set(ids.filter((id): id is string => Boolean(id)))]
+  }
+
   /** A link or image on our host whose URL carries claim=<token>, or the bare verify string anywhere. */
   private hasClaimBadge(html: string, token: string): boolean {
     if (!html) return false
     const exact = (prefix: string) => new RegExp(`${prefix}${token}(?![A-Za-z0-9_-])`)
     if (exact(CLAIM_PREFIX).test(html)) return true
-    const urls = html.matchAll(new RegExp(`(?:href|src)\\s*=\\s*["']?((?:https?:)?//${this.ourHosts()}/[^"'\\s>]*)`, 'gi'))
-    return [...urls].some((m) => exact('[?&](?:amp;)?claim=').test(m[1]!))
+    return this.ourUrls(html).some((u) => exact('[?&](?:amp;)?claim=').test(u))
   }
 
   private async read(url: string): Promise<SiteInfo> {
@@ -290,9 +311,10 @@ export class BuiltIndie {
     return this.store.update(p.id, { makerProfile: r.url.href, makerId: maker.id, makerVerified: verified, makerName: clip(name?.trim() || profile.name, 60) })!
   }
 
-  /** Has the maker linked back to us from their homepage? */
+  /** Has the maker linked back to us from their homepage, or put this listing's badge (any account's id) on it? */
   async verify(p: Product): Promise<boolean> {
-    const ok = this.linksBack(await this.homepage(p))
+    const html = await this.homepage(p)
+    const ok = this.linksBack(html) || this.badgeIds(html).some((id) => this.store.badge(id)?.productId === p.id)
     this.store.setVerified(p.id, ok ? Date.now() : null)
     return ok
   }

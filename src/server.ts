@@ -232,9 +232,9 @@ export function createApp(deps: Deps) {
     }
   })
 
-  // Claiming: the domain's owner proves it in DNS, or with the badge carrying their token, and takes the listing.
+  // Claiming: the domain's owner proves it with the badge carrying their badge id, or in DNS, and takes the listing.
   const claimRecord = (p: Product, user: User) => ({ type: 'TXT', name: `${CLAIM_LABEL}.${p.domain.replace(/^www\./, '')}`, value: `${CLAIM_PREFIX}${service.claimToken(p, user)}` })
-  const claimBadge = (p: Product, user: User) => claimBadgeSnippet(origin, p, service.claimToken(p, user))
+  const claimBadge = (p: Product, user: User) => claimBadgeSnippet(origin, p, store.badgeId(p.id, user.id))
   const claimMd = (p: Product, user: User) => claimMarkdown(origin, p, claimRecord(p, user), claimBadge(p, user))
   const claimView = (c: Context<Env>, p: Product, user: User, extra: { result?: { ok: boolean; looked: string[]; method?: string } } = {}, status = 200) =>
     page(c, claimPage(ctxOf(c), { product: p, record: claimRecord(p, user), badge: claimBadge(p, user), owner: p.ownerId === user.id, ...extra }), status)
@@ -349,8 +349,7 @@ export function createApp(deps: Deps) {
   })
 
   // The badge: the viral part. Cached briefly so the count stays live.
-  app.get('/badge/:file{[a-z0-9-]+\\.svg}', (c) => {
-    const p = live(c.req.param('file').replace(/\.svg$/, ''))
+  const badgeImage = (c: Context<Env>, p: Product | null) => {
     if (!p) return c.body('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>', 404, { 'content-type': 'image/svg+xml' })
     return c.body(badgeSvg(p, store.awards(p.id), c.req.query('theme') === 'light' ? 'light' : 'dark'), 200, {
       'content-type': 'image/svg+xml; charset=utf-8',
@@ -359,6 +358,13 @@ export function createApp(deps: Deps) {
       'cross-origin-resource-policy': 'cross-origin',
       'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'",
     })
+  }
+  app.get('/badge/:file{[a-z0-9-]+\\.svg}', (c) => badgeImage(c, live(c.req.param('file').replace(/\.svg$/, ''))))
+  // The same badge by badge id: the one the claim page hands out. On a homepage it claims the listing for that account.
+  app.get('/images.svg', (c) => {
+    const b = store.badge(c.req.query('id') ?? '')
+    const p = b ? store.product(b.productId) : null
+    return badgeImage(c, p?.status === 'live' ? p : null)
   })
 
   app.get('/makers/:id', (c) => {

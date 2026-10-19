@@ -14,7 +14,7 @@ Paste a URL and built.indie reads the homepage the way a careful person would: t
 
 Then it goes on today's board. People upvote (one per visitor). The board resets at midnight UTC; yesterday's winners get "#1 Product of the day" on their page and badge.
 
-**Free to launch, no account.** Anyone can launch any site. To edit a listing, sign in (an emailed link) and **claim** it by adding a DNS TXT record, `_built-indie.<domain>` → `built-indie-verify=<token>`, or by putting the badge with your claim token on the homepage (`<img src="…/badge/<slug>.svg?claim=<token>">`, the claim page and the API hand you the snippet). The badge also earns the followed link and the ✓. A signed-in submitter can edit until the owner claims it.
+**Free to launch, no account.** Anyone can launch any site. To edit a listing, sign in (an emailed link) and **claim** it. The easy way is the badge: put `<img src="https://built.indie.pit.world/images.svg?id=<id>">` on the homepage, where the id is unique to that listing and your account (the claim page, `claim.md`, the API and the CLI hand you the full snippet). Finding it claims the listing for you and earns the followed link and the ✓ in one step. Or add a DNS TXT record, `_built-indie.<domain>` → `built-indie-verify=<token>`. (Badges placed earlier as `/badge/<slug>.svg?claim=<token>` still claim.) A signed-in submitter can edit until the owner claims it.
 
 Viral bits: a live badge with the upvote count (`/badge/<slug>.svg`) that turns a link back into a followed link and a ✓ once we see it on the homepage, share buttons, an OG card per product, RSS, and an optional crypto-paid **Featured** slot (CoinPay).
 
@@ -31,7 +31,7 @@ builtindie top week
 builtindie show linear
 builtindie vote linear
 builtindie preview any.site --json
-BUILTINDIE_KEY=bi_… builtindie claim linear   # prints the TXT record and the badge, then checks them
+BUILTINDIE_KEY=bi_… builtindie claim linear   # prints your badge and the TXT record, then checks them
 BUILTINDIE_KEY=bi_… builtindie edit linear --tagline "…"
 
 claude mcp add builtindie -- bunx @profullstack/builtindie mcp
