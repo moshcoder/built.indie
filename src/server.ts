@@ -452,11 +452,12 @@ export function createApp(deps: Deps) {
   })
 
   app.post('/api/v1/products', async (c) => {
-    if (!readLimit.allow(`read:${ip(c)}`)) return c.json({ error: 'too many launches from you; wait a few minutes' }, 429)
+    const admin = isAdmin(c)
+    if (!admin && !readLimit.allow(`read:${ip(c)}`)) return c.json({ error: 'too many launches from you; wait a few minutes' }, 429)
     const b = await body(c)
     try {
       const user = apiUser(c)
-      const r = await service.submit({ url: String(b.url ?? ''), makerName: b.maker_name, makerProfile: b.maker_profile }, store.voterFor(ip(c)), user)
+      const r = await service.submit({ url: String(b.url ?? ''), makerName: b.maker_name, makerProfile: b.maker_profile }, store.voterFor(ip(c)), user, admin)
       if (r.existing) return c.json({ existing: true, product: apiProduct(r.product) }, 200)
       let p = r.product
       if (user && (b.name || b.tagline || b.description || b.tags || b.videos)) p = await service.edit(p, { name: b.name, tagline: b.tagline, description: b.description, tags: b.tags, videos: b.videos })
