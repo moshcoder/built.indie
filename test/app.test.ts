@@ -132,6 +132,15 @@ describe('autofetch', () => {
     await expect(autofetch('acme.test', no)).rejects.toThrow('asks not to be indexed')
   })
 
+  test('a manifest short_name is only a last resort for the name', async () => {
+    const web = fakeWeb({
+      'https://acme.test/': new Response('<html><head><title>family.ancestry</title><link rel="manifest" href="/manifest.json"></head><body></body></html>', { headers: { 'content-type': 'text/html' } }),
+      'https://acme.test/manifest.json': Response.json({ name: 'family.ancestry', short_name: 'Family' }),
+      'https://acme.test/llms.txt': new Response('', { status: 404 }),
+    })
+    expect((await autofetch('acme.test', web)).name).toBe('family.ancestry')
+  })
+
   test('robots.txt that shuts us out is respected', async () => {
     const web = fakeWeb({ 'https://acme.test/robots.txt': new Response('User-agent: built.indie\nDisallow: /\n') })
     await expect(autofetch('acme.test', web)).rejects.toThrow('robots.txt')
