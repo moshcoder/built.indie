@@ -47,9 +47,20 @@ export type Config = {
 export const CLAIM_LABEL = '_built-indie'
 export const CLAIM_PREFIX = 'built-indie-verify='
 
-const resolver = new Resolver({ timeout: 4000, tries: 2 })
-resolver.setServers(['1.1.1.1', '9.9.9.9'])
-const publicTxt = (name: string) => resolver.resolveTxt(name)
+/**
+ * TXT records as public resolvers see them: every answer from 1.1.1.1 and 9.9.9.9, merged.
+ * One Resolver per server on purpose: Bun 1.4's node:dns Resolver given two servers
+ * answers ENOTFOUND for a record each of them serves alone, so no claim could succeed.
+ */
+const PUBLIC_DNS = ['1.1.1.1', '9.9.9.9'].map((server) => {
+  const r = new Resolver({ timeout: 4000, tries: 2 })
+  r.setServers([server])
+  return r
+})
+export async function publicTxt(name: string, resolvers: Pick<Resolver, 'resolveTxt'>[] = PUBLIC_DNS): Promise<string[][]> {
+  const answers = await Promise.all(resolvers.map((r) => r.resolveTxt(name).catch(() => [] as string[][])))
+  return answers.flat()
+}
 
 export const CHAIN_LABELS: Record<string, string> = {
   USDC_POL: 'USDC on Polygon', USDC_SOL: 'USDC on Solana', USDC_ETH: 'USDC on Ethereum', USDT_POL: 'USDT on Polygon',
