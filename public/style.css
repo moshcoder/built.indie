@@ -153,7 +153,8 @@ footer.pfs-footer .pfs-footer__inner { max-width: 820px; padding: 1rem 16px; fle
 .ring-bar .ring-home { color: var(--accent); font-weight: 700; }
 .ring-bar .ring-sites { display: inline-flex; gap: 12px; padding: 0 12px; border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
 .ring-bar [aria-current='page'] { color: var(--text); }
-@media (max-width: 640px) { .ring-bar .ring-sites, .ring-bar .ring-home span { display: none; } }
+.ring-bar .ring-start { margin-left: auto; color: var(--accent); font-weight: 700; }
+@media (max-width: 640px) { .ring-bar .ring-home span { display: none; } }
 /* OpenIcon icons: inline SVG in currentColor */
 .i { width: 1em; height: 1em; vertical-align: -.125em; flex: none; }
 .chip .i, .btn .i { margin-right: .15em; }
