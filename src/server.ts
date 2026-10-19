@@ -7,6 +7,7 @@
  * https://built.indie.pit.world, which is the address we hand out (badges,
  * share links, feeds) because it works for everybody.
  */
+import { startRingFooterRefresh } from './ring-footer.js'
 import { Hono, type Context } from 'hono'
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
 import { leaderboard } from '@profullstack/leaderboard/hono'
@@ -765,5 +766,6 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
 
 if (import.meta.main) {
   const server = serve()
+  startRingFooterRefresh()
   console.log(`built.indie listening on http://${server.hostname}:${server.port}`)
 }
