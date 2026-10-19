@@ -24,6 +24,8 @@ Viral bits: a live badge with the upvote count (`/badge/<slug>.svg`) that turns 
 
 **Leaderboard.** `/leaderboard` ranks the top inviters (week, month, all time) with badges, on [@profullstack/leaderboard](https://github.com/profullstack/leaderboard). It projects the `invites` table, so there is no second ledger; badges live in the `lb_` tables of the same database. The package also serves `/leaderboard.json`, `/leaderboard/invites.json|.xml`, a share card per member at `/leaderboard/u/<id>`, and a widget any site can embed (`/leaderboard/embed.js`). Members appear by the name they set on `/invite`, else as "Maker of <their best listing>"; never by email.
 
+**Browse and search.** A search box in the header of every page (press `/`; it suggests launches as you type) opens `/search`: a facet rail in the style of [r4ck.dev](https://r4ck.dev) with counts for category, tags, when it launched, what it has (✓ verified, claimed, video, llms.txt, OpenSite/OpenProfile/OpenStack/OpenSaaS), what it is built with (OpenStack.md) and maker, plus sort and active-filter chips. Values in one facet are OR'd, facets are AND'd, and each facet counts as if only it changed. Tags are what the page or the maker said; categories are a fixed set of twenty-one read from a listing's tags, name, tagline and description (`src/browse.ts`), so every launch is filed even with no tags. `/c/<category>` and `/t/<tag>` are indexable pages for one filter; the same query is `GET /api/v1/search` (products + facets), `GET /api/v1/categories`, `builtindie search … --category ai --has verified --facets`, and the MCP `search` / `list_categories` tools.
+
 Every product is published back as an OpenSite record (`/p/<slug>/opensite.json`) and an OpenProfile (`/p/<slug>/openprofile.md`); makers are OpenProfiles too (`/makers/<id>/openprofile.md`). Icons are the [OpenIcon](https://github.com/profullstack/openicon) reference set.
 
 ## Surfaces
@@ -34,6 +36,7 @@ curl -fsSL https://built.indie.pit.world/install.sh | sh
 builtindie                       # TUI: today's board, ←/→ boards, v upvote, l launch
 builtindie launch yourproduct.com
 builtindie top week
+builtindie search crm --category ai --has verified   # filters, as on /search
 builtindie show linear
 builtindie vote linear
 builtindie preview any.site --json

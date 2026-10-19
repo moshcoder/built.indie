@@ -6,6 +6,7 @@
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import type { InviteStats, Maker, Product, User, Window } from './db.js'
+import { categorize, CATEGORY_LABELS, FACETS, isEmpty, queryString, SORTS, toggle, type Query, type Result } from './browse.js'
 import { pitFooter } from './pit-footer.js'
 import { RING_PLACEHOLDER } from './ring.js'
 import { ringFooter, ringFooterOptions, setRingFooterOptions } from './ring-footer.js'
@@ -51,7 +52,7 @@ const LOGO = `<svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><path d="
 
 export type Ctx = { origin: string; user?: User | null; voted?: (id: string) => boolean }
 
-type LayoutOptions = { title: string; description: string; path: string; body: string; ctx: Ctx; noindex?: boolean; image?: string | null; head?: string; ads?: boolean }
+type LayoutOptions = { title: string; description: string; path: string; body: string; ctx: Ctx; noindex?: boolean; image?: string | null; head?: string; ads?: boolean; wide?: boolean; q?: string }
 
 function layout(o: LayoutOptions): string {
   const url = o.ctx.origin + o.path
@@ -86,9 +87,15 @@ ${TRACKER}
 </head>
 <body>
 ${RING_PLACEHOLDER}
-<header class="top">
+<header class="top${o.wide ? ' wide' : ''}">
   <a class="brand" href="/">${LOGO}<span>built<b>.</b>indie</span></a>
+  <form class="top-search" role="search" method="get" action="/search" data-suggest>
+    <label class="sr" for="site-q">Search launches</label>
+    <input id="site-q" name="q" type="search" placeholder="Search apps, tags, makers…" value="${esc(o.q ?? '')}" autocomplete="off" maxlength="80" enterkeyhint="search" aria-autocomplete="list" aria-controls="site-suggest"><kbd aria-hidden="true">/</kbd>
+    <div class="suggest" id="site-suggest" role="listbox" hidden></div>
+  </form>
   <nav aria-label="Site">
+    <a href="/search">Browse</a>
     <a href="/top/today">Today</a>
     <a href="/top/week">Week</a>
     <a href="/new">New</a>
@@ -100,7 +107,7 @@ ${RING_PLACEHOLDER}
     <a class="btn small-btn" href="/submit">${icon('rocket')} Launch</a>
   </nav>
 </header>
-<main>
+<main${o.wide ? ' class="wide"' : ''}>
 ${o.ads ? adUnit('text_link') : ''}
 ${o.body}
 </main>
@@ -136,7 +143,7 @@ function row(ctx: Ctx, p: Product, rank?: number): string {
   <a class="row-main" href="/p/${esc(p.slug)}">
     ${logoImg(p)}
     <span class="row-text"><b>${esc(p.name)}</b>${p.verifiedAt ? ' <span class="tick" title="Links back to built.indie">✓</span>' : ''}<span class="muted">${esc(p.tagline || p.domain)}</span>
-    ${p.tags.length ? `<span class="tags">${p.tags.slice(0, 3).map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</span>` : ''}</span>
+    <span class="tags">${categorize(p).slice(0, 1).filter((c) => c !== 'other').map((c) => `<span class="tag cat">${esc(CATEGORY_LABELS[c])}</span>`).join('')}${p.tags.slice(0, 3).map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</span></span>
   </a>
   ${voteButton(ctx, p)}
 </li>`
@@ -205,24 +212,19 @@ ${d.yesterday.length ? `<h2 class="section-h">Yesterday’s winners</h2>${board(
 
 const WINDOW_TITLES: Record<Window, string> = { today: 'Top today', week: 'Top this week', month: 'Top this month', all: 'Top of all time', new: 'Newest launches', featured: 'Featured' }
 
-export function boardPage(ctx: Ctx, window: Window, products: Product[], q?: string): string {
-  const tabs = (['today', 'week', 'month', 'all', 'new'] as Window[]).map((w) => `<a href="${w === 'new' ? '/new' : `/top/${w}`}"${w === window && !q ? ' aria-current="page"' : ''}>${esc(WINDOW_TITLES[w].replace(/^Top (this )?|^Top of /, '').replace(/^Newest launches$/, 'New'))}</a>`).join('')
+export function boardPage(ctx: Ctx, window: Window, products: Product[]): string {
+  const tabs = (['today', 'week', 'month', 'all', 'new'] as Window[]).map((w) => `<a href="${w === 'new' ? '/new' : `/top/${w}`}"${w === window ? ' aria-current="page"' : ''}>${esc(WINDOW_TITLES[w].replace(/^Top (this )?|^Top of /, '').replace(/^Newest launches$/, 'New'))}</a>`).join('')
   return layout({
     ctx,
-    title: q ? `“${q}” on built.indie` : `${WINDOW_TITLES[window]} · built.indie`,
+    title: `${WINDOW_TITLES[window]} · built.indie`,
     description: `${WINDOW_TITLES[window]}: indie products launched on built.indie.`,
-    path: q ? `/search?q=${enc(q)}` : window === 'new' ? '/new' : `/top/${window}`,
-    noindex: Boolean(q),
+    path: window === 'new' ? '/new' : `/top/${window}`,
     ads: true,
-    body: `<h1 class="page-h">${q ? `Search: ${esc(q)}` : esc(WINDOW_TITLES[window])}</h1>
-<nav class="tabs" aria-label="Boards">${tabs}</nav>
-${searchForm(q)}
+    body: `<h1 class="page-h">${esc(WINDOW_TITLES[window])}</h1>
+<nav class="tabs" aria-label="Boards">${tabs}<a href="/search">Browse &amp; filter</a></nav>
 ${board(ctx, products, window !== 'new') || '<p class="empty">Nothing here yet.</p>'}`,
   })
 }
-
-const searchForm = (q?: string) =>
-  `<form class="search" method="get" action="/search"><label class="sr" for="q">Search</label><input id="q" name="q" placeholder="Search launches or tags" value="${esc(q ?? '')}"></form>`
 
 /** Every tag, sized by how many launches carry it. */
 export function tagsPage(ctx: Ctx, tags: { tag: string; count: number }[]): string {
@@ -233,23 +235,90 @@ export function tagsPage(ctx: Ctx, tags: { tag: string; count: number }[]): stri
     description: 'Browse indie products launched on built.indie by topic.',
     path: '/tags',
     body: `<h1 class="page-h">Tags</h1>
-${searchForm()}
+<p class="muted">Every tag, sized by use. <a href="/search">Browse with filters</a> to combine tags, categories and more.</p>
 ${tags.length ? `<p class="tag-cloud">${tags.map((t) => `<a class="tag" href="/t/${enc(t.tag)}" style="font-size:${(0.8 + (0.7 * t.count) / max).toFixed(2)}rem">${esc(t.tag)} <span class="muted">${t.count}</span></a>`).join('')}</p>` : '<p class="empty">No tags yet.</p>'}`,
   })
 }
 
-/** Launches with one tag, best first. */
-export function tagPage(ctx: Ctx, tag: string, products: Product[]): string {
+const searchHref = (q: Query) => {
+  const s = queryString(q)
+  return s ? `/search?${s}` : '/search'
+}
+
+/** The facet rail: every value is a link that switches it on or off, with how many it would show. */
+function facetRail(r: Result): string {
+  const groups = FACETS.map((f) => {
+    const values = r.facets[f.name]
+    if (!values.length) return ''
+    const selected = f.name === 'launched' ? (r.query.launched ? [r.query.launched] : []) : r.query[f.name]
+    const open = ['category', 'launched', 'has'].includes(f.name) || selected.length > 0
+    return `<details class="facet-group"${open ? ' open' : ''}><summary>${esc(f.label)}${selected.length ? ` <span class="facet-n">${selected.length}</span>` : ''}</summary><ul>${values
+      .map((v) => {
+        const on = selected.includes(v.value)
+        return `<li><a class="facet-item${on ? ' on' : ''}" href="${esc(searchHref(toggle(r.query, f.name, v.value)))}" rel="nofollow"${on ? ' aria-current="true"' : ''}><span class="facet-check${f.multi ? '' : ' radio'}" aria-hidden="true"></span><span class="facet-label">${esc(v.label)}</span><span class="facet-count">${v.count}</span></a></li>`
+      })
+      .join('')}</ul></details>`
+  }).join('')
+  return groups || '<p class="muted small">Nothing to narrow yet.</p>'
+}
+
+function chipsHtml(r: Result): string {
+  if (!r.chips.length) return ''
+  return `<ul class="chips">${r.chips
+    .map((c) => `<li><a class="chip on" href="${esc(searchHref(c.facet === 'q' ? { ...r.query, q: '', sort: r.query.sort === 'relevance' ? 'top' : r.query.sort, page: 1 } : toggle(r.query, c.facet, c.value)))}" rel="nofollow" aria-label="Remove ${esc(c.label)}">${esc(c.label)} <span aria-hidden="true">×</span></a></li>`)
+    .join('')}<li><a class="chip clear" href="/search">Clear all</a></li></ul>`
+}
+
+function pager(r: Result): string {
+  const pages = Math.ceil(r.total / r.limit)
+  if (pages <= 1) return ''
+  const at = r.query.page
+  return `<nav class="pager" aria-label="Pages">${at > 1 ? `<a class="chip" href="${esc(searchHref({ ...r.query, page: at - 1 }))}" rel="prev">← Previous</a>` : ''}<span class="muted small">Page ${at} of ${pages}</span>${at < pages ? `<a class="chip" href="${esc(searchHref({ ...r.query, page: at + 1 }))}" rel="next">Next →</a>` : ''}</nav>`
+}
+
+/**
+ * Browse and search: the facet rail, what is switched on, and the results.
+ * /search takes any combination; /c/<category> and /t/<tag> are the same page
+ * for one filter, under an address worth indexing.
+ */
+export function browsePage(ctx: Ctx, r: Result, d: { path: string; heading?: string; intro?: string } = { path: '/search' }): string {
+  const q = r.query
+  const what = r.chips.map((c) => c.label).join(' · ')
+  const heading = d.heading ?? (isEmpty(q) ? 'Browse every launch' : q.q && r.chips.length === 1 ? `Search: ${q.q}` : what)
+  const hidden = (k: string, v: string) => `<input type="hidden" name="${esc(k)}" value="${esc(v)}">`
+  const keep = [
+    ...(q.q ? [hidden('q', q.q)] : []),
+    ...(['category', 'tag', 'has', 'stack', 'maker'] as const).flatMap((k) => q[k].map((v) => hidden(k, v))),
+    ...(q.launched ? [hidden('launched', q.launched)] : []),
+  ].join('')
   return layout({
     ctx,
-    title: `${tag} · built.indie`,
-    description: `Indie products tagged ${tag} on built.indie.`,
-    path: `/t/${enc(tag)}`,
+    title: `${heading} (${r.total}) · built.indie`,
+    description: d.intro ?? `${r.total} indie launch${r.total === 1 ? '' : 'es'}${what ? ` matching ${what}` : ''}. Filter by category, tag, stack, maker and more.`,
+    path: d.path,
+    // Filter combinations are endless; only the plain pages are worth indexing.
+    noindex: d.path === '/search' && !isEmpty(q),
     ads: true,
-    body: `<h1 class="page-h">Tagged: ${esc(tag)}</h1>
-<p class="muted"><a href="/tags">All tags</a> · <a href="/search?q=${enc(tag)}">Search “${esc(tag)}”</a></p>
-${searchForm()}
-${board(ctx, products) || '<p class="empty">Nothing tagged this yet.</p>'}`,
+    wide: true,
+    q: q.q,
+    body: `<div class="browse">
+<details class="facets" open data-facets>
+  <summary class="facets-toggle">Filters${r.chips.filter((c) => c.facet !== 'q').length ? ` <span class="facet-n">${r.chips.filter((c) => c.facet !== 'q').length}</span>` : ''}</summary>
+  <div class="facet-rail">${facetRail(r)}</div>
+</details>
+<section class="results">
+  <header class="results-head">
+    <div><h1 class="page-h">${esc(heading)}</h1><p class="muted small">${r.total} launch${r.total === 1 ? '' : 'es'}${d.intro ? ` · ${esc(d.intro)}` : ''}</p></div>
+    <form class="sort-form" method="get" action="/search" data-autosubmit>${keep}<label class="sr" for="sort">Sort by</label><select id="sort" name="sort">${(Object.keys(SORTS) as (keyof typeof SORTS)[])
+      .filter((s) => s !== 'relevance' || q.q)
+      .map((s) => `<option value="${s}"${q.sort === s ? ' selected' : ''}>${esc(SORTS[s])}</option>`)
+      .join('')}</select><noscript><button class="chip">Sort</button></noscript></form>
+  </header>
+  ${chipsHtml(r)}
+  ${board(ctx, r.products, false) || `<p class="empty">Nothing matches all of that. Remove a filter, or <a href="/search">start over</a>.${q.q ? ` Or <a href="/submit?url=${enc(q.q)}">launch it</a> if it is yours.` : ''}</p>`}
+  ${pager(r)}
+</section>
+</div>`,
   })
 }
 
@@ -331,7 +400,7 @@ ${shots.length ? `<div class="gallery">${shots.map((f, i) => `<a href="${esc(med
 ${p.videos.length ? `<div class="videos">${p.videos.map((v) => (v.embed ? `<div class="video"><iframe src="${esc(v.embed)}" title="${esc(p.name)} video" loading="lazy" allow="fullscreen; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin" sandbox="allow-scripts allow-same-origin allow-popups allow-presentation"></iframe></div>` : `<p><a href="${esc(v.url)}" rel="nofollow noopener" target="_blank">▶ Watch the video</a></p>`)).join('')}</div>` : ''}
 <div class="card">
   ${p.description ? `<p class="desc">${esc(p.description)}</p>` : ''}
-  ${p.tags.length ? `<p class="tags">${p.tags.map((t) => `<a class="tag" href="/t/${enc(t)}">${esc(t)}</a>`).join('')}</p>` : ''}
+  <p class="tags">${categorize(p).map((c) => `<a class="tag cat" href="/c/${esc(c)}">${esc(CATEGORY_LABELS[c])}</a>`).join('')}${p.tags.map((t) => `<a class="tag" href="/t/${enc(t)}">${esc(t)}</a>`).join('')}</p>
   ${Object.keys(p.socials).length ? `<p class="socials">${Object.entries(p.socials).map(([k, v]) => `<a class="chip" href="${esc(v)}" rel="nofollow noopener" target="_blank">${icon(SOCIAL_ICONS[k] ?? 'globe')} ${esc(SOCIAL_LABELS[k] ?? k)}</a>`).join('')}</p>` : ''}
   ${stackHtml(p)}
   ${pricingHtml(p)}
@@ -581,6 +650,8 @@ export function helpPage(ctx: Ctx): string {
 curl ${o}/api/v1/products?window=today      # today|week|month|all|new|featured
 curl ${o}/api/v1/products?tag=game          # one tag
 curl ${o}/api/v1/tags                       # every tag with its count
+curl '${o}/api/v1/search?q=crm&amp;category=ai&amp;tag=productivity&amp;has=verified&amp;sort=new'   # + facets with counts
+curl ${o}/api/v1/categories                 # every category and tag, with counts
 curl ${o}/api/v1/products/&lt;slug&gt;
 curl -X POST ${o}/api/v1/products/&lt;slug&gt;/vote
 curl -X POST ${o}/api/v1/preview -d '{"url":"any.site"}' -H 'content-type: application/json'
@@ -601,6 +672,7 @@ builtindie                                    # TUI: today's board, vote, launch
 bunx @profullstack/builtindie                 # or run it without installing
 bunx @profullstack/builtindie launch yourproduct.com
 bunx @profullstack/builtindie top week
+bunx @profullstack/builtindie search crm --category ai --has verified --facets
 bunx @profullstack/builtindie show &lt;slug&gt;
 bunx @profullstack/builtindie vote &lt;slug&gt;
 BUILTINDIE_KEY=bi_… bunx @profullstack/builtindie claim &lt;slug&gt;   # your badge (or a TXT record), then checks it
@@ -608,7 +680,7 @@ BUILTINDIE_KEY=bi_… bunx @profullstack/builtindie invite          # your invit
 bunx @profullstack/builtindie preview any.site --json</pre></div>
 <div class="card" id="mcp"><h2>MCP</h2>
 <pre>claude mcp add builtindie -- bunx @profullstack/builtindie mcp</pre>
-<p class="muted">Tools: <code>launch_product</code>, <code>preview_site</code>, <code>list_products</code>, <code>get_product</code>, <code>upvote</code>, <code>search</code>, and with <code>BUILTINDIE_KEY</code>: <code>claim_product</code>, <code>edit_product</code>, <code>my_products</code>, <code>my_invites</code>, <code>feature_with_credit</code>.</p></div>
+<p class="muted">Tools: <code>launch_product</code>, <code>preview_site</code>, <code>list_products</code>, <code>get_product</code>, <code>upvote</code>, <code>search</code> (with filters and facets), <code>list_categories</code>, and with <code>BUILTINDIE_KEY</code>: <code>claim_product</code>, <code>edit_product</code>, <code>my_products</code>, <code>my_invites</code>, <code>feature_with_credit</code>.</p></div>
 <div class="card" id="bot"><h2>Our reader</h2>
 <p class="muted">We fetch only what a person submits, once, plus a re-read when the maker asks. User agent <code>built.indie/1.0</code>. We honour <code>robots.txt</code> and <code>index.allow: false</code> in <code>/.well-known/opensite.json</code>. Screenshots are taken with headless Chrome.</p></div>
 <div class="card"><h2>Make your page read well</h2>

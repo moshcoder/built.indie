@@ -14,7 +14,8 @@ import { leaderboard } from '@profullstack/leaderboard/hono'
 import { Auth, consoleMailer, resendMailer, safeNext, SESSION_COOKIE, validEmail, type Mailer } from './auth.js'
 import { Store, type Product, type User, type Window } from './db.js'
 import { privateAddress } from './fetch.js'
-import { badgeSvg, boardPage, cardImage, claimBadgeSnippet, claimMarkdown, claimPage, editPage, esc, helpPage, homePage, inviteLanding, invitePage, leaderboardPage, loginPage, makerPage, mePage, messagePage, productPage, submitPage, tagPage, tagsPage, type Ctx, type InviterRow } from './html.js'
+import { CATEGORY_LABELS, parseQuery, queryString, search } from './browse.js'
+import { badgeSvg, boardPage, browsePage, cardImage, claimBadgeSnippet, claimMarkdown, claimPage, editPage, esc, helpPage, homePage, inviteLanding, invitePage, leaderboardPage, loginPage, makerPage, mePage, messagePage, productPage, submitPage, tagsPage, type Ctx, type InviterRow } from './html.js'
 import { normalizeTag } from './tags.js'
 import { inviteLeaderboard } from './leaderboard.js'
 import { IMAGE_TYPES, Media } from './media.js'
@@ -164,16 +165,30 @@ export function createApp(deps: Deps) {
     return page(c, boardPage(ctxOf(c), w, store.list(w, 50)))
   })
   app.get('/new', (c) => page(c, boardPage(ctxOf(c), 'new', store.list('new', 50))))
-  app.get('/search', (c) => {
-    const q = (c.req.query('q') ?? '').trim().slice(0, 60)
-    return q ? page(c, boardPage(ctxOf(c), 'all', store.search(q), q)) : c.redirect('/top/all')
+  // Browse and search, with facets (browse.ts). /c/ and /t/ are one filter each, at an indexable address.
+  const browse = (c: Context, extra: Record<string, string> = {}) => {
+    const params = new URL(c.req.url).searchParams
+    for (const [k, v] of Object.entries(extra)) if (!params.getAll(k).includes(v)) params.append(k, v)
+    return search(store.allLive(), parseQuery(params))
+  }
+  app.get('/search', (c) => page(c, browsePage(ctxOf(c), browse(c))))
+  app.get('/c/:category', (c) => {
+    const key = c.req.param('category')
+    if (!(key in CATEGORY_LABELS)) return c.notFound()
+    const label = CATEGORY_LABELS[key]!
+    // Further filters go to /search, so /c/<category> stays one page.
+    if (new URL(c.req.url).search) return c.redirect(`/search?category=${encodeURIComponent(key)}&${new URL(c.req.url).searchParams}`)
+    return page(c, browsePage(ctxOf(c), browse(c, { category: key }), { path: `/c/${key}`, heading: label, intro: `${label}: indie products launched on built.indie` }))
   })
-  app.get('/tags', (c) => page(c, tagsPage(ctxOf(c), store.tagCounts())))
   app.get('/t/:tag', (c) => {
     const tag = normalizeTag(c.req.param('tag'))
     if (!tag) return c.notFound()
-    return tag === c.req.param('tag') ? page(c, tagPage(ctxOf(c), tag, store.byTag(tag))) : c.redirect(`/t/${encodeURIComponent(tag)}`, 301)
+    if (tag !== c.req.param('tag')) return c.redirect(`/t/${encodeURIComponent(tag)}`, 301)
+    if (new URL(c.req.url).search) return c.redirect(`/search?tag=${encodeURIComponent(tag)}&${new URL(c.req.url).searchParams}`)
+    const r = browse(c, { tag })
+    return page(c, browsePage(ctxOf(c), r, { path: `/t/${encodeURIComponent(tag)}`, heading: `#${tag}`, intro: `Indie products tagged ${tag}` }), r.total ? 200 : 404)
   })
+  app.get('/tags', (c) => page(c, tagsPage(ctxOf(c), store.tagCounts())))
   app.get('/help', (c) => page(c, helpPage(ctxOf(c))))
 
   // Launching.
@@ -482,7 +497,8 @@ export function createApp(deps: Deps) {
     return c.body(`<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>built.indie launches</title><link>${origin}/</link><description>Indie products launched on built.indie</description>${items}</channel></rss>`, 200, { 'content-type': 'application/rss+xml; charset=utf-8' })
   })
   app.get('/sitemap.xml', (c) => {
-    const urls = ['/', '/top/today', '/top/week', '/top/month', '/top/all', '/new', '/submit', '/help', '/invite', '/leaderboard', '/tags', ...store.tagCounts().map((t) => `/t/${encodeURIComponent(t.tag)}`), ...store.list('all', 5000).map((p) => `/p/${p.slug}`)]
+    const all = search(store.allLive(), parseQuery({}), { limit: 0 })
+    const urls = ['/', '/search', '/tags', '/top/today', '/top/week', '/top/month', '/top/all', '/new', '/submit', '/help', '/invite', '/leaderboard', ...all.facets.category.map((f) => `/c/${f.value}`), ...store.tagCounts().map((t) => `/t/${encodeURIComponent(t.tag)}`), ...store.list('all', 5000).map((p) => `/p/${p.slug}`)]
     return c.body(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map((u) => `<url><loc>${origin}${u}</loc></url>`).join('')}</urlset>`, 200, { 'content-type': 'application/xml' })
   })
   app.get('/robots.txt', (c) => c.text(`User-agent: *\nAllow: /\nDisallow: /p/*/edit\nSitemap: ${origin}/sitemap.xml\n`))
@@ -581,8 +597,33 @@ export function createApp(deps: Deps) {
     if (!q && !tag && !WINDOWS.includes(w)) return c.json({ error: `window is one of ${WINDOWS.join(', ')}` }, 400)
     const limit = Math.min(100, Math.max(1, Number(c.req.query('limit') ?? 30) || 30))
     const offset = Math.max(0, Number(c.req.query('offset') ?? 0) || 0)
-    const products = tag ? store.byTag(tag, limit) : q ? store.search(q.slice(0, 60), limit) : store.list(w, limit, offset)
+    const products = tag ? store.byTag(tag, limit) : q ? search(store.allLive(), parseQuery({ q }), { limit }).products : store.list(w, limit, offset)
     return c.json({ window: tag ? 'tag' : q ? 'search' : w, ...(tag ? { tag } : {}), products: products.map(apiProduct) }, 200, { 'access-control-allow-origin': '*' })
+  })
+
+  // Search with facets: the browse page as data. Same parameters as /search.
+  app.get('/api/v1/search', (c) => {
+    const params = new URL(c.req.url).searchParams
+    const limit = Math.min(100, Math.max(1, Number(params.get('limit') ?? 30) || 30))
+    const r = search(store.allLive(), parseQuery(params), { limit })
+    const qs = queryString(r.query)
+    return c.json(
+      {
+        query: r.query,
+        total: r.total,
+        page: r.query.page,
+        pages: Math.ceil(r.total / limit),
+        products: r.products.map((p) => ({ ...apiProduct(p), categories: r.categories.get(p.id) ?? [] })),
+        ...(params.get('facets') === '0' ? {} : { facets: r.facets }),
+        web: `${origin}/search${qs ? `?${qs}` : ''}`,
+      },
+      200,
+      { 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=30' },
+    )
+  })
+  app.get('/api/v1/categories', (c) => {
+    const r = search(store.allLive(), parseQuery({}), { limit: 0 })
+    return c.json({ categories: r.facets.category.map((f) => ({ key: f.value, label: f.label, count: f.count, page: `${origin}/c/${f.value}` })), tags: r.facets.tag.map((f) => ({ tag: f.value, count: f.count, page: `${origin}/t/${encodeURIComponent(f.value)}` })) }, 200, { 'access-control-allow-origin': '*' })
   })
 
   app.get('/api/v1/tags', (c) => c.json({ tags: store.tagCounts() }, 200, { 'access-control-allow-origin': '*' }))
