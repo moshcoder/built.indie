@@ -8,10 +8,20 @@ import { readFileSync } from 'node:fs'
 import type { InviteStats, Maker, Product, User, Window } from './db.js'
 import { pitFooter } from './pit-footer.js'
 import { RING_PLACEHOLDER } from './ring.js'
+import { ringFooter, ringFooterOptions, setRingFooterOptions } from './ring-footer.js'
 import { CHAIN_LABELS } from './service.js'
 import { icon, SOCIAL_ICONS } from './icons.js'
 
 export const REPO = 'https://github.com/moshcoder/built.indie'
+
+// The footer's own links; the ring nav and copyright come from @profullstack/footer.
+setRingFooterOptions(
+  ringFooterOptions([
+    { label: 'API · CLI · MCP', href: '/help' },
+    { label: 'RSS', href: '/feed.xml' },
+    { label: 'Source', href: REPO },
+  ]),
+)
 
 /** crawlproof analytics on every page (project 71b194a4…); CRAWLPROOF_SITE=off turns it off. */
 const TRACK_SITE = process.env.CRAWLPROOF_SITE ?? '71b194a4-9ae7-4b79-9ec1-0cf0d5ef203e'
@@ -93,9 +103,7 @@ ${RING_PLACEHOLDER}
 ${o.ads ? adUnit('text_link') : ''}
 ${o.body}
 </main>
-<footer>
-  <span>© built.indie · <a href="/help">API · CLI · MCP</a> · <a href="/feed.xml">RSS</a> · <a href="${REPO}">Source</a></span>
-</footer>
+${ringFooter()}
 ${pitFooter()}
 </body>
 </html>`
