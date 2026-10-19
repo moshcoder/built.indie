@@ -10,6 +10,8 @@
  *   builtindie search <words>
  *   builtindie claim <slug>            prove you own the domain (the badge or DNS TXT), BUILTINDIE_KEY
  *   builtindie me                      your launches, BUILTINDIE_KEY
+ *   builtindie invite                  your invite link and free Featured credits, BUILTINDIE_KEY
+ *   builtindie credit <slug>           spend a credit: feature a listing you own, BUILTINDIE_KEY
  *   builtindie edit <slug> --tagline … (BUILTINDIE_KEY)
  *   builtindie refetch <slug>          (BUILTINDIE_KEY)
  *   builtindie mcp                     MCP server on stdio
@@ -32,6 +34,8 @@ export const HELP = `builtindie ${VERSION}: launch your indie product with one U
                                       it is yours, then checks both; --md prints the steps as Markdown
                                       to paste to an AI with DNS or site access
   builtindie me                       your launches
+  builtindie invite                   your invite link; each maker it brings in who launches = a free Featured week
+  builtindie credit <slug>            spend a credit to feature a listing you own
   builtindie edit <slug> [--name --tagline --description --tags a,b --video URL]
   builtindie refetch <slug>           read the homepage again
   builtindie publish <slug>           put a draft live
@@ -187,6 +191,17 @@ export async function main(argv = process.argv.slice(2), out: Out = console, cli
       case 'me': {
         const r = await client.me()
         show(r, `${r.email}\n${r.products.map((p) => `${line(p)}  ${p.owner ? 'claimed ✓' : p.status === 'draft' ? 'draft' : 'not claimed'}`).join('\n') || 'No launches yet.'}`)
+        return 0
+      }
+      case 'invite':
+      case 'invites': {
+        const r = await client.invites()
+        show(r, `Your invite link: ${r.link}\n${r.invited} joined · ${r.launched} launched · ${r.credits} free Featured week${r.credits === 1 ? '' : 's'} to use (${r.feature_days} days each)${r.credits ? '\nUse one: builtindie credit <slug>' : ''}`)
+        return 0
+      }
+      case 'credit': {
+        const r = await client.credit(rest[0] ?? '')
+        show(r, `${rest[0]} is Featured until ${r.featured_until.slice(0, 10)} ★  (${r.credits} credit${r.credits === 1 ? '' : 's'} left)`)
         return 0
       }
       case 'verify': {

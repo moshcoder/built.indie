@@ -237,7 +237,21 @@ export class BuiltIndie {
   publish(p: Product): Product {
     if (p.status === 'hidden') throw new InputError('This product was taken down.')
     if (!p.name.trim()) throw new InputError('Give it a name', 'name')
-    return this.store.update(p.id, { status: 'live' })!
+    const live = this.store.update(p.id, { status: 'live' })!
+    // An invited member's first live listing earns whoever invited them a free Featured week.
+    const inviter = p.submitterUser ? this.store.earnInvite(p.submitterUser, p.id) : null
+    if (inviter) this.onInviteEarned?.(inviter, live)
+    return live
+  }
+
+  /** Called when a listing earns its submitter's inviter a credit: the server mails them and refreshes the board. */
+  onInviteEarned?: (inviterId: string, product: Product) => void
+
+  /** Spend one invite credit on a live listing: featured for the usual number of days, free. */
+  redeemCredit(p: Product, user: User): Product {
+    if (p.status !== 'live') throw new InputError('Only a live listing can be featured.')
+    if (!this.store.redeemCredit(user.id, p.id, this.config.featureDays)) throw new InputError('No invite credits left. Invite a maker who launches to earn one.')
+    return this.store.product(p.id)!
   }
 
   async refetch(p: Product): Promise<Product> {

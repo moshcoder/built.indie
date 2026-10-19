@@ -8,6 +8,7 @@
         "@modelcontextprotocol/sdk": "^1.17.0",
         "@profullstack/coinpay-onboard": "^0.1.1",
         "@profullstack/hqtui": "^0.10.3",
+        "@profullstack/leaderboard": "^0.3.1",
         "@profullstack/openprofile": "^0.2.0",
         "hono": "^4.13.13",
         "zod": "^3.25.0",
@@ -26,6 +27,8 @@
     "@profullstack/coinpay-onboard": ["@profullstack/coinpay-onboard@0.1.1", "", { "dependencies": { "@modelcontextprotocol/sdk": "^1.17.0", "zod": "^3.25.0" }, "bin": { "coinpay-onboard": "bin/coinpay-onboard" } }, "sha512-DmAyv8FGNS36iZ9MK1TvICMbceyu5cij70uaYt9idW1wRjXFp2CPY/NFdf2xgXmoqe07PC9sc8AlyGUbJSQIXA=="],
 
     "@profullstack/hqtui": ["@profullstack/hqtui@0.10.3", "", { "bin": { "hqtui": "bin/hqtui.mjs" } }, "sha512-Z2jaDqmiaGyrMy4JXOoPGCyEkei8l3tHoCbmT3/1gAWDl72ynPvMuHcUj+U97KgsF/CFIpZzzBYnYqcOq5e46g=="],
+
+    "@profullstack/leaderboard": ["@profullstack/leaderboard@0.3.1", "", {}, "sha512-LbxLwy+RvT/Qez0mfWCk4o9hvcq0kzwBZ0vF+CYp+oGvyqJWUaSTLhCHWGtKKAI3c0ZUXj6ll0iuRjbuZUE2Sg=="],
 
     "@profullstack/openprofile": ["@profullstack/openprofile@0.2.0", "", {}, "sha512-cdFsBbfRXurvy5KqHDNcKXxurK2s/YlfVgnILFRpVl2hq3860rExqDee8IfsFGxw5cPdqGv2fxUxtek1Xy2U5Q=="],
 

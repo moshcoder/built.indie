@@ -9,10 +9,12 @@
  */
 import { Hono, type Context } from 'hono'
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
-import { Auth, consoleMailer, resendMailer, safeNext, SESSION_COOKIE, validEmail } from './auth.js'
+import { leaderboard } from '@profullstack/leaderboard/hono'
+import { Auth, consoleMailer, resendMailer, safeNext, SESSION_COOKIE, validEmail, type Mailer } from './auth.js'
 import { Store, type Product, type User, type Window } from './db.js'
 import { privateAddress } from './fetch.js'
-import { badgeSvg, boardPage, cardImage, claimBadgeSnippet, claimMarkdown, claimPage, editPage, esc, helpPage, homePage, loginPage, makerPage, mePage, messagePage, productPage, submitPage, type Ctx } from './html.js'
+import { badgeSvg, boardPage, cardImage, claimBadgeSnippet, claimMarkdown, claimPage, editPage, esc, helpPage, homePage, inviteLanding, invitePage, leaderboardPage, loginPage, makerPage, mePage, messagePage, productPage, submitPage, type Ctx, type InviterRow } from './html.js'
+import { inviteLeaderboard } from './leaderboard.js'
 import { IMAGE_TYPES, Media } from './media.js'
 import { RING_PLACEHOLDER, ringBar, startRingRefresh, visitorOnMoshpit } from './ring.js'
 import { BuiltIndie, CLAIM_LABEL, CLAIM_PREFIX, DEFAULT_CHAINS, InputError, type Config, type Edit } from './service.js'
@@ -46,7 +48,10 @@ const SECURITY_HEADERS: Record<string, string> = {
   'cross-origin-opener-policy': 'same-origin',
 }
 
-export type Deps = { service: BuiltIndie; auth: Auth; adminKey?: string; secureCookies?: boolean }
+export type Deps = { service: BuiltIndie; auth: Auth; adminKey?: string; secureCookies?: boolean; mailer?: Mailer }
+
+/** The invite code from /i/<code>, kept until the visitor signs up (it also rides in the magic link). */
+const REF_COOKIE = 'bi_ref'
 type Env = { Bindings: { ip?: string } }
 
 /** A small fixed-window limit per key, in memory: enough to stop a loop, not a fortress. */
@@ -100,6 +105,23 @@ export function createApp(deps: Deps) {
     const p = store.bySlug(slug)
     return p?.status === 'live' ? p : null
   }
+  const secure = (c: Context) => deps.secureCookies ?? (c.req.header('x-forwarded-proto') ?? 'https') === 'https'
+
+  // The invite program and its leaderboard (@profullstack/leaderboard over the invites table).
+  const board = inviteLeaderboard(store, origin)
+  const inviters = async (limit: number): Promise<InviterRow[]> => (await board.top({ board: 'invites', period: 'week', limit })).rows.map((r) => ({ ...r, url: `/leaderboard/u/${encodeURIComponent(r.id)}` }))
+  const inviteLink = (user: User) => `${origin}/i/${store.inviteCode(user.id)}`
+  service.onInviteEarned = (inviterId, p) => {
+    board.invalidate()
+    // A projection is never record()ed, so badges are checked here, when the fact they rest on changes.
+    board.award(inviterId).catch((e) => console.error(`[invite] badges: ${(e as Error).message}`))
+    const inviter = store.user(inviterId)
+    if (!inviter || !deps.mailer) return
+    const credits = store.inviteStats(inviterId).credits
+    const text = `${p.name} just launched on built.indie through your invite: ${origin}/p/${p.slug}\n\nThat earned you a free Featured week. You have ${credits} to use: ${origin}/invite\n\nKeep going: every maker you invite who launches earns another.`
+    const html = `<p><b>${esc(p.name)}</b> just launched on built.indie through your invite: <a href="${origin}/p/${esc(p.slug)}">${origin}/p/${esc(p.slug)}</a></p><p>That earned you a free Featured week. You have <b>${credits}</b> to use.</p><p><a href="${origin}/invite" style="display:inline-block;padding:10px 18px;background:#ff5c39;color:#fff;border-radius:8px;text-decoration:none;font-weight:700">Use it</a></p>`
+    deps.mailer({ to: inviter.email, subject: `You earned a free Featured week on built.indie`, text, html }).catch((e) => console.error(`[invite] mail failed: ${(e as Error).message}`))
+  }
 
   app.use('*', async (c, next) => {
     await next()
@@ -130,8 +152,8 @@ export function createApp(deps: Deps) {
   app.get('/.well-known/openstack.md', async (c) => c.body(await Bun.file(new URL('../OpenStack.md', import.meta.url)).text(), 200, { 'content-type': 'text/markdown; charset=utf-8', 'access-control-allow-origin': '*' }))
 
   // Boards.
-  app.get('/', (c) =>
-    page(c, homePage(ctxOf(c), { today: store.list('today'), featured: store.list('featured', 3), yesterday: store.onDay(new Date(Date.now() - 86400_000).toISOString().slice(0, 10), 3), stats: store.count() })),
+  app.get('/', async (c) =>
+    page(c, homePage(ctxOf(c), { today: store.list('today'), featured: store.list('featured', 3), yesterday: store.onDay(new Date(Date.now() - 86400_000).toISOString().slice(0, 10), 3), stats: store.count(), inviters: await inviters(5), featureDays: config.featureDays, featureUsd: config.featureUsd })),
   )
   app.get('/top/:window', (c) => {
     const w = c.req.param('window') as Window
@@ -171,8 +193,13 @@ export function createApp(deps: Deps) {
         award: store.awards(p.id),
         maker: p.makerId ? store.maker(p.makerId) : null,
         featuredOk: c.req.query('featured') === '1',
+        featuredCredit: c.req.query('featured') === 'credit',
         launched: c.req.query('launched') === '1',
         canEdit: store.canEdit(p, sessionUser(c)),
+        credits: (() => {
+          const u = sessionUser(c)
+          return u && store.canEdit(p, u) ? store.inviteStats(u.id).credits : 0
+        })(),
         chains: config.chains,
         featureUsd: config.featureUsd,
         featureDays: config.featureDays,
@@ -264,18 +291,26 @@ export function createApp(deps: Deps) {
   })
 
   // Signing in: an emailed link, which is also sign-up.
-  app.get('/login', (c) => page(c, loginPage(ctxOf(c), { next: safeNext(c.req.query('next')) })))
+  const invitedBy = (c: Context) => {
+    const inviter = store.inviterOf(getCookie(c, REF_COOKIE) ?? '')
+    return inviter && !sessionUser(c) ? store.publicName(inviter) : null
+  }
+  app.get('/login', (c) => page(c, loginPage(ctxOf(c), { next: safeNext(c.req.query('next')), invitedBy: invitedBy(c) })))
   app.post('/login', async (c) => {
     const form = (await c.req.parseBody()) as Record<string, string>
     const next = safeNext(form.next)
     if (!validEmail(form.email)) return page(c, loginPage(ctxOf(c), { next, error: 'That does not look like an email address.', email: form.email }), 400)
-    if (!crossSite(c) && readLimit.allow(`mail:${ip(c)}`)) await deps.auth.sendLink(form.email ?? '', next, here(c))
+    if (!crossSite(c) && readLimit.allow(`mail:${ip(c)}`)) await deps.auth.sendLink(form.email ?? '', next, here(c), getCookie(c, REF_COOKIE) ?? null)
     return page(c, loginPage(ctxOf(c), { next, sent: true }))
   })
   app.get('/auth/verify', (c) => {
     const r = deps.auth.consumeLink(c.req.query('token') ?? '')
     if (!r) return page(c, messagePage(ctxOf(c), { title: 'That link is used up', message: 'Sign-in links work once, for 20 minutes. Ask for a new one.' }), 400)
-    setCookie(c, SESSION_COOKIE, deps.auth.createSession(r.user.id), { httpOnly: true, secure: deps.secureCookies ?? (c.req.header('x-forwarded-proto') ?? 'https') === 'https', sameSite: 'Lax', path: '/', maxAge: 90 * 86400 })
+    setCookie(c, SESSION_COOKIE, deps.auth.createSession(r.user.id), { httpOnly: true, secure: secure(c), sameSite: 'Lax', path: '/', maxAge: 90 * 86400 })
+    // A new member who came through an invite link: their first live listing will earn the inviter a credit.
+    const ref = r.ref ?? getCookie(c, REF_COOKIE)
+    if (r.created && ref) store.recordInvite(r.user.id, ref)
+    if (ref) deleteCookie(c, REF_COOKIE, { path: '/' })
     return c.redirect(r.next ?? '/me')
   })
   app.post('/logout', (c) => {
@@ -285,14 +320,61 @@ export function createApp(deps: Deps) {
   })
   app.get('/me', (c) => {
     const user = sessionUser(c)
-    return user ? page(c, mePage(ctxOf(c), { user, products: store.mine(user.id) })) : toLogin(c)
+    return user ? page(c, mePage(ctxOf(c), { user, products: store.mine(user.id), invite: store.inviteStats(user.id) })) : toLogin(c)
   })
   app.post('/me/key', (c) => {
     const user = sessionUser(c)
     if (!user) return toLogin(c)
     if (crossSite(c)) return c.redirect('/me')
-    return page(c, mePage(ctxOf(c), { user, products: store.mine(user.id), apiKey: store.newApiKey(user.id) }))
+    return page(c, mePage(ctxOf(c), { user, products: store.mine(user.id), apiKey: store.newApiKey(user.id), invite: store.inviteStats(user.id) }))
   })
+
+  // Invites: a link per member; a new member it brings in who launches earns the inviter a free Featured week.
+  app.get('/i/:code', (c) => {
+    const code = c.req.param('code')
+    const inviter = store.inviterOf(code)
+    if (!inviter) return c.redirect('/invite')
+    if (!sessionUser(c)) setCookie(c, REF_COOKIE, code, { httpOnly: true, secure: secure(c), sameSite: 'Lax', path: '/', maxAge: 30 * 86400 })
+    return page(c, inviteLanding(ctxOf(c), { inviter: store.publicName(inviter) }))
+  })
+  const inviteView = async (c: Context<Env>, extra: { flash?: string; error?: string } = {}, status = 200) => {
+    const user = sessionUser(c)
+    const me = user
+      ? { link: inviteLink(user), stats: store.inviteStats(user.id), name: store.publicName(user.id), displayName: user.displayName, listings: store.mine(user.id).filter((p) => p.status === 'live'), ...extra }
+      : undefined
+    return page(c, invitePage(ctxOf(c), { featureDays: config.featureDays, featureUsd: config.featureUsd, inviters: await inviters(10), me }), status)
+  }
+  app.get('/invite', (c) => inviteView(c))
+  app.post('/invite/name', async (c) => {
+    const user = sessionUser(c)
+    if (!user) return toLogin(c)
+    if (crossSite(c)) return c.redirect('/invite')
+    const name = String(((await c.req.parseBody()) as Record<string, string>).displayName ?? '').replace(/\s+/g, ' ').trim().slice(0, 40)
+    store.setDisplayName(user.id, name || null)
+    board.invalidate()
+    return inviteView(c, { flash: name ? `Saved. The board shows you as ${name}.` : 'Cleared. The board shows your best listing instead.' })
+  })
+  app.post('/p/:slug/credit', (c) => {
+    const user = sessionUser(c)
+    if (!user) return toLogin(c)
+    const p = store.bySlug(c.req.param('slug'))
+    if (!p || p.status === 'hidden') return c.notFound()
+    if (crossSite(c) || !store.canEdit(p, user)) return c.redirect(`/p/${p.slug}`)
+    try {
+      service.redeemCredit(p, user)
+      return c.redirect(`/p/${p.slug}?featured=credit`)
+    } catch (e) {
+      return inviteView(c, { error: e instanceof Error ? e.message : String(e) }, 400)
+    }
+  })
+
+  // The leaderboard: our page, then the package answers everything under /leaderboard (JSON, RSS, share cards, widget).
+  app.get('/leaderboard', (c) => {
+    const user = sessionUser(c)
+    return page(c, leaderboardPage(ctxOf(c), { featureDays: config.featureDays, featureUsd: config.featureUsd, me: user?.id ?? null }))
+  })
+  app.use('/leaderboard.json', leaderboard(board))
+  app.use('/leaderboard/*', leaderboard(board))
 
   app.post('/p/:slug/vote', (c) => {
     const p = live(c.req.param('slug'))
@@ -385,7 +467,7 @@ export function createApp(deps: Deps) {
     return c.body(`<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>built.indie launches</title><link>${origin}/</link><description>Indie products launched on built.indie</description>${items}</channel></rss>`, 200, { 'content-type': 'application/rss+xml; charset=utf-8' })
   })
   app.get('/sitemap.xml', (c) => {
-    const urls = ['/', '/top/today', '/top/week', '/top/month', '/top/all', '/new', '/submit', '/help', ...store.list('all', 5000).map((p) => `/p/${p.slug}`)]
+    const urls = ['/', '/top/today', '/top/week', '/top/month', '/top/all', '/new', '/submit', '/help', '/invite', '/leaderboard', ...store.list('all', 5000).map((p) => `/p/${p.slug}`)]
     return c.body(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map((u) => `<url><loc>${origin}${u}</loc></url>`).join('')}</urlset>`, 200, { 'content-type': 'application/xml' })
   })
   app.get('/robots.txt', (c) => c.text(`User-agent: *\nAllow: /\nDisallow: /p/*/edit\nSitemap: ${origin}/sitemap.xml\n`))
@@ -533,6 +615,8 @@ export function createApp(deps: Deps) {
       const p = store.bySlug(c.req.param('slug'))
       if (!p) return c.json({ error: 'no such product' }, 404)
       store.update(p.id, { status: 'hidden' })
+      store.revokeInvite(p.id)
+      board.invalidate()
       return c.json({ hidden: true })
     }
     const p = owned(c)
@@ -562,7 +646,26 @@ export function createApp(deps: Deps) {
   app.get('/api/v1/me', (c) => {
     const user = apiUser(c)
     if (!user) return c.json(NEEDS_ACCOUNT, 401)
-    return c.json({ email: user.email, products: store.mine(user.id).map((p) => ({ ...apiProduct(p), owner: p.ownerId === user.id })) })
+    return c.json({ email: user.email, products: store.mine(user.id).map((p) => ({ ...apiProduct(p), owner: p.ownerId === user.id })), invite: apiInvite(user) })
+  })
+  const apiInvite = (user: User) => {
+    const s = store.inviteStats(user.id)
+    return { link: inviteLink(user), code: s.code, invited: s.invited, launched: s.launched, credits: s.credits, used: s.used, feature_days: config.featureDays }
+  }
+  app.get('/api/v1/invites', (c) => {
+    const user = apiUser(c)
+    return user ? c.json(apiInvite(user)) : c.json(NEEDS_ACCOUNT, 401)
+  })
+  app.post('/api/v1/products/:slug/credit', (c) => {
+    const user = apiUser(c)
+    const p = owned(c)
+    if (!user || !p) return c.json(NEEDS_KEY, 401)
+    try {
+      const after = service.redeemCredit(p, user)
+      return c.json({ featured_until: new Date(after.featuredUntil!).toISOString(), credits: store.inviteStats(user.id).credits })
+    } catch (e) {
+      return apiError(c, e)
+    }
   })
 
   app.get('/api/v1/makers/:id', (c) => {
@@ -640,7 +743,7 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   const media = new Media(env.BUILTINDIE_MEDIA ?? `${dataDir}/media`)
   const service = new BuiltIndie(store, media, { ...configFromEnv(env), claimSecret: env.BUILTINDIE_KEY })
   const mailer = env.RESEND_API_KEY ? resendMailer(env.RESEND_API_KEY, env.MAIL_FROM ?? 'built.indie <built@pit.world>') : consoleMailer
-  const app = createApp({ service, auth: new Auth(store, mailer), adminKey: env.BUILTINDIE_ADMIN_KEY })
+  const app = createApp({ service, auth: new Auth(store, mailer), adminKey: env.BUILTINDIE_ADMIN_KEY, mailer })
   const relays = (env.BUILTINDIE_RELAY_IPS ?? '23.95.228.174,127.0.0.1,::1').split(/[\s,]+/).filter(Boolean)
   startRingRefresh()
   // Drafts nobody launched within a day go, pictures too.

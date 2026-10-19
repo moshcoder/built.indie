@@ -1,6 +1,6 @@
 {
   "name": "@profullstack/builtindie",
-  "version": "0.1.8",
+  "version": "0.2.0",
   "description": "built.indie: launch your indie product with one URL. We fetch the logo, screenshots, videos, llms.txt, OpenSite and OpenProfile from your homepage; people upvote; you get a badge. Web (PWA), API, CLI, TUI and MCP.",
   "license": "MIT",
   "type": "module",
@@ -26,6 +26,7 @@
     "@modelcontextprotocol/sdk": "^1.17.0",
     "@profullstack/coinpay-onboard": "^0.1.1",
     "@profullstack/hqtui": "^0.10.3",
+    "@profullstack/leaderboard": "^0.3.1",
     "@profullstack/openprofile": "^0.2.0",
     "hono": "^4.13.13",
     "zod": "^3.25.0"
