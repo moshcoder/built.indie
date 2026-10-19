@@ -92,6 +92,7 @@ ${RING_PLACEHOLDER}
     <a href="/top/today">Today</a>
     <a href="/top/week">Week</a>
     <a href="/new">New</a>
+    <a href="/tags">Tags</a>
     <a href="/invite">Invite</a>
     <a href="/leaderboard">Leaderboard</a>
     <a href="/help">API</a>
@@ -215,8 +216,40 @@ export function boardPage(ctx: Ctx, window: Window, products: Product[], q?: str
     ads: true,
     body: `<h1 class="page-h">${q ? `Search: ${esc(q)}` : esc(WINDOW_TITLES[window])}</h1>
 <nav class="tabs" aria-label="Boards">${tabs}</nav>
-<form class="search" method="get" action="/search"><label class="sr" for="q">Search</label><input id="q" name="q" placeholder="Search launches" value="${esc(q ?? '')}"></form>
+${searchForm(q)}
 ${board(ctx, products, window !== 'new') || '<p class="empty">Nothing here yet.</p>'}`,
+  })
+}
+
+const searchForm = (q?: string) =>
+  `<form class="search" method="get" action="/search"><label class="sr" for="q">Search</label><input id="q" name="q" placeholder="Search launches or tags" value="${esc(q ?? '')}"></form>`
+
+/** Every tag, sized by how many launches carry it. */
+export function tagsPage(ctx: Ctx, tags: { tag: string; count: number }[]): string {
+  const max = Math.max(1, ...tags.map((t) => t.count))
+  return layout({
+    ctx,
+    title: 'Tags · built.indie',
+    description: 'Browse indie products launched on built.indie by topic.',
+    path: '/tags',
+    body: `<h1 class="page-h">Tags</h1>
+${searchForm()}
+${tags.length ? `<p class="tag-cloud">${tags.map((t) => `<a class="tag" href="/t/${enc(t.tag)}" style="font-size:${(0.8 + (0.7 * t.count) / max).toFixed(2)}rem">${esc(t.tag)} <span class="muted">${t.count}</span></a>`).join('')}</p>` : '<p class="empty">No tags yet.</p>'}`,
+  })
+}
+
+/** Launches with one tag, best first. */
+export function tagPage(ctx: Ctx, tag: string, products: Product[]): string {
+  return layout({
+    ctx,
+    title: `${tag} · built.indie`,
+    description: `Indie products tagged ${tag} on built.indie.`,
+    path: `/t/${enc(tag)}`,
+    ads: true,
+    body: `<h1 class="page-h">Tagged: ${esc(tag)}</h1>
+<p class="muted"><a href="/tags">All tags</a> · <a href="/search?q=${enc(tag)}">Search “${esc(tag)}”</a></p>
+${searchForm()}
+${board(ctx, products) || '<p class="empty">Nothing tagged this yet.</p>'}`,
   })
 }
 
@@ -298,7 +331,7 @@ ${shots.length ? `<div class="gallery">${shots.map((f, i) => `<a href="${esc(med
 ${p.videos.length ? `<div class="videos">${p.videos.map((v) => (v.embed ? `<div class="video"><iframe src="${esc(v.embed)}" title="${esc(p.name)} video" loading="lazy" allow="fullscreen; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin" sandbox="allow-scripts allow-same-origin allow-popups allow-presentation"></iframe></div>` : `<p><a href="${esc(v.url)}" rel="nofollow noopener" target="_blank">▶ Watch the video</a></p>`)).join('')}</div>` : ''}
 <div class="card">
   ${p.description ? `<p class="desc">${esc(p.description)}</p>` : ''}
-  ${p.tags.length ? `<p class="tags">${p.tags.map((t) => `<a class="tag" href="/search?q=${enc(t)}">${esc(t)}</a>`).join('')}</p>` : ''}
+  ${p.tags.length ? `<p class="tags">${p.tags.map((t) => `<a class="tag" href="/t/${enc(t)}">${esc(t)}</a>`).join('')}</p>` : ''}
   ${Object.keys(p.socials).length ? `<p class="socials">${Object.entries(p.socials).map(([k, v]) => `<a class="chip" href="${esc(v)}" rel="nofollow noopener" target="_blank">${icon(SOCIAL_ICONS[k] ?? 'globe')} ${esc(SOCIAL_LABELS[k] ?? k)}</a>`).join('')}</p>` : ''}
   ${stackHtml(p)}
   ${pricingHtml(p)}
@@ -546,6 +579,8 @@ export function helpPage(ctx: Ctx): string {
 # → { product, claim_url }   free; live at once
 
 curl ${o}/api/v1/products?window=today      # today|week|month|all|new|featured
+curl ${o}/api/v1/products?tag=game          # one tag
+curl ${o}/api/v1/tags                       # every tag with its count
 curl ${o}/api/v1/products/&lt;slug&gt;
 curl -X POST ${o}/api/v1/products/&lt;slug&gt;/vote
 curl -X POST ${o}/api/v1/preview -d '{"url":"any.site"}' -H 'content-type: application/json'

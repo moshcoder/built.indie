@@ -14,7 +14,8 @@ import { leaderboard } from '@profullstack/leaderboard/hono'
 import { Auth, consoleMailer, resendMailer, safeNext, SESSION_COOKIE, validEmail, type Mailer } from './auth.js'
 import { Store, type Product, type User, type Window } from './db.js'
 import { privateAddress } from './fetch.js'
-import { badgeSvg, boardPage, cardImage, claimBadgeSnippet, claimMarkdown, claimPage, editPage, esc, helpPage, homePage, inviteLanding, invitePage, leaderboardPage, loginPage, makerPage, mePage, messagePage, productPage, submitPage, type Ctx, type InviterRow } from './html.js'
+import { badgeSvg, boardPage, cardImage, claimBadgeSnippet, claimMarkdown, claimPage, editPage, esc, helpPage, homePage, inviteLanding, invitePage, leaderboardPage, loginPage, makerPage, mePage, messagePage, productPage, submitPage, tagPage, tagsPage, type Ctx, type InviterRow } from './html.js'
+import { normalizeTag } from './tags.js'
 import { inviteLeaderboard } from './leaderboard.js'
 import { IMAGE_TYPES, Media } from './media.js'
 import { startPitFooterRefresh } from './pit-footer.js'
@@ -166,6 +167,12 @@ export function createApp(deps: Deps) {
   app.get('/search', (c) => {
     const q = (c.req.query('q') ?? '').trim().slice(0, 60)
     return q ? page(c, boardPage(ctxOf(c), 'all', store.search(q), q)) : c.redirect('/top/all')
+  })
+  app.get('/tags', (c) => page(c, tagsPage(ctxOf(c), store.tagCounts())))
+  app.get('/t/:tag', (c) => {
+    const tag = normalizeTag(c.req.param('tag'))
+    if (!tag) return c.notFound()
+    return tag === c.req.param('tag') ? page(c, tagPage(ctxOf(c), tag, store.byTag(tag))) : c.redirect(`/t/${encodeURIComponent(tag)}`, 301)
   })
   app.get('/help', (c) => page(c, helpPage(ctxOf(c))))
 
@@ -475,7 +482,7 @@ export function createApp(deps: Deps) {
     return c.body(`<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>built.indie launches</title><link>${origin}/</link><description>Indie products launched on built.indie</description>${items}</channel></rss>`, 200, { 'content-type': 'application/rss+xml; charset=utf-8' })
   })
   app.get('/sitemap.xml', (c) => {
-    const urls = ['/', '/top/today', '/top/week', '/top/month', '/top/all', '/new', '/submit', '/help', '/invite', '/leaderboard', ...store.list('all', 5000).map((p) => `/p/${p.slug}`)]
+    const urls = ['/', '/top/today', '/top/week', '/top/month', '/top/all', '/new', '/submit', '/help', '/invite', '/leaderboard', '/tags', ...store.tagCounts().map((t) => `/t/${encodeURIComponent(t.tag)}`), ...store.list('all', 5000).map((p) => `/p/${p.slug}`)]
     return c.body(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map((u) => `<url><loc>${origin}${u}</loc></url>`).join('')}</urlset>`, 200, { 'content-type': 'application/xml' })
   })
   app.get('/robots.txt', (c) => c.text(`User-agent: *\nAllow: /\nDisallow: /p/*/edit\nSitemap: ${origin}/sitemap.xml\n`))
@@ -569,11 +576,16 @@ export function createApp(deps: Deps) {
   app.get('/api/v1/products', (c) => {
     const w = (c.req.query('window') ?? 'today') as Window
     const q = c.req.query('q')
-    if (!q && !WINDOWS.includes(w)) return c.json({ error: `window is one of ${WINDOWS.join(', ')}` }, 400)
+    const tag = c.req.query('tag') !== undefined ? normalizeTag(c.req.query('tag')!) : undefined
+    if (tag === null) return c.json({ error: 'tag is 2 to 24 letters, digits, spaces or + # . -' }, 400)
+    if (!q && !tag && !WINDOWS.includes(w)) return c.json({ error: `window is one of ${WINDOWS.join(', ')}` }, 400)
     const limit = Math.min(100, Math.max(1, Number(c.req.query('limit') ?? 30) || 30))
     const offset = Math.max(0, Number(c.req.query('offset') ?? 0) || 0)
-    return c.json({ window: q ? 'search' : w, products: (q ? store.search(q.slice(0, 60), limit) : store.list(w, limit, offset)).map(apiProduct) }, 200, { 'access-control-allow-origin': '*' })
+    const products = tag ? store.byTag(tag, limit) : q ? store.search(q.slice(0, 60), limit) : store.list(w, limit, offset)
+    return c.json({ window: tag ? 'tag' : q ? 'search' : w, ...(tag ? { tag } : {}), products: products.map(apiProduct) }, 200, { 'access-control-allow-origin': '*' })
   })
+
+  app.get('/api/v1/tags', (c) => c.json({ tags: store.tagCounts() }, 200, { 'access-control-allow-origin': '*' }))
 
   app.get('/api/v1/products/:slug', (c) => {
     const p = store.bySlug(c.req.param('slug'))

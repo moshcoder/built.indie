@@ -174,3 +174,4 @@ footer.pfs-footer .pfs-footer__inner { max-width: 820px; padding: 1rem 16px; fle
 /* @profullstack/leaderboard widget, in our colours (it injects its own CSS at runtime, hence the specificity). */
 :root { --bi-panel: var(--panel); --bi-text: var(--text); --bi-muted: var(--muted); --bi-line: var(--line); --bi-accent: var(--accent); --bi-gold: var(--gold); }
 .card .pflb.pflb { --bg: var(--bi-panel); --fg: var(--bi-text); --muted: var(--bi-muted); --line: var(--bi-line); --accent: var(--bi-accent); --gold: var(--bi-gold); --hi: color-mix(in srgb, var(--bi-accent) 12%, var(--bi-panel)); }
+.tag-cloud { display: flex; flex-wrap: wrap; gap: .5rem; line-height: 1.6; }

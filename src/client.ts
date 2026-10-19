@@ -73,6 +73,14 @@ export class BuiltIndieClient {
     return this.call('GET', `/api/v1/products?window=${encodeURIComponent(window)}&limit=${limit}`)
   }
 
+  tags(): Promise<{ tags: { tag: string; count: number }[] }> {
+    return this.call('GET', '/api/v1/tags')
+  }
+
+  tagged(tag: string, limit = 30): Promise<{ tag: string; products: ApiProduct[] }> {
+    return this.call('GET', `/api/v1/products?tag=${encodeURIComponent(tag)}&limit=${limit}`)
+  }
+
   search(q: string): Promise<{ products: ApiProduct[] }> {
     return this.call('GET', `/api/v1/products?q=${encodeURIComponent(q)}`)
   }

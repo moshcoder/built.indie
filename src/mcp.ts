@@ -45,6 +45,13 @@ export function createMcpServer(client = new BuiltIndieClient()): McpServer {
     wrap((a: { window: string; limit: number }) => client.list(a.window, a.limit)),
   )
   server.tool('get_product', 'Everything about one launch: description, pictures, videos, socials, maker, votes, award.', { slug }, wrap((a: { slug: string }) => client.product(a.slug)))
+  server.tool('list_tags', 'Every tag on built.indie with how many launches carry it, most used first.', {}, wrap(() => client.tags()))
+  server.tool(
+    'tagged',
+    'Launches with one exact tag (from list_tags), best first.',
+    { tag: z.string().min(2).max(24), limit: z.number().int().min(1).max(100).default(20) },
+    wrap((a: { tag: string; limit: number }) => client.tagged(a.tag, a.limit)),
+  )
   server.tool('search', 'Search launches by name, tagline, domain or tag.', { query: z.string().min(1).max(60) }, wrap((a: { query: string }) => client.search(a.query)))
   server.tool('upvote', 'Upvote a product (one vote per visitor).', { slug }, wrap((a: { slug: string }) => client.vote(a.slug)))
   server.tool(
