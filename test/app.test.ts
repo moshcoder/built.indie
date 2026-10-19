@@ -242,8 +242,9 @@ describe('the site', () => {
     const value = claimPage.match(new RegExp(`${CLAIM_PREFIX}[\\w-]+`))![0]
     expect(claimPage).toContain('_built-indie.acme.test')
     expect(claimPage).toContain('Copy as Markdown for AI')
-    expect(claimPage).toContain('Or the badge on your homepage')
-    expect(claimPage).toContain(`/badge/acme.svg?claim=${value.slice(CLAIM_PREFIX.length)}`)
+    expect(claimPage).toContain('The badge on your homepage (easiest)')
+    expect(claimPage).toContain('Or a DNS record')
+    expect(claimPage.indexOf('images.svg?id=')).toBeLessThan(claimPage.indexOf('_built-indie.acme.test'))
     expect((await call('/p/acme/claim.md')).headers.get('location')).toBe('/login?next=%2Fp%2Facme%2Fclaim.md')
     const md = await call('/p/acme/claim.md', authed())
     expect(md.headers.get('content-type')).toContain('text/markdown')
@@ -252,7 +253,7 @@ describe('the site', () => {
     expect(mdText).toContain(`| Value / content | \`${value}\` |`)
     expect(mdText).toContain('dig +short TXT _built-indie.acme.test @1.1.1.1')
     expect(mdText).toContain('builtindie claim acme')
-    expect(await (await call('/p/acme/claim', authed(form({})))).text()).toContain('did not find the record')
+    expect(await (await call('/p/acme/claim', authed(form({})))).text()).toContain('did not find the badge or the record')
     txt['_built-indie.acme.test'] = [[value]]
     expect(await (await call('/p/acme/claim', authed(form({})))).text()).toContain('is yours ✓')
     const user = store.findOrCreateUser('ada@example.com')
@@ -312,9 +313,10 @@ describe('the site', () => {
     const claim = async () => (await call('/api/v1/products/acme/claim', json({}, auth))).json()
     const info = await (await call('/api/v1/products/acme/claim', { headers: auth })).json()
     const token = setupToken(store, owner.id)
-    expect(info.badge).toBe(`<a href="https://built.indie.pit.world/p/acme"><img src="https://built.indie.pit.world/badge/acme.svg?claim=${token}" alt="Launched on built.indie" width="200" height="44"></a>`)
-    expect(info.markdown).toContain('Option B: the badge on the homepage')
-    expect(info.markdown).toContain(`?claim=${token}`)
+    const id = store.badgeId(store.bySlug('acme')!.id, owner.id)
+    expect(info.badge).toBe(`<a href="https://built.indie.pit.world/p/acme"><img src="https://built.indie.pit.world/images.svg?id=${id}" alt="Launched on built.indie" width="200" height="44"></a>`)
+    expect(info.markdown).toContain('Option A (easiest): the badge on the homepage')
+    expect(info.markdown).toContain(`images.svg?id=${id}`)
     // The badge route ignores the extra query.
     expect((await call(`/badge/acme.svg?claim=${token}`)).status).toBe(200)
     // No badge: not claimed, and we say we looked at the homepage too.
@@ -348,6 +350,62 @@ describe('the site', () => {
     const dkey = store.newApiKey(mallory.id)
     txt['_built-indie.acme.test'] = [[`${CLAIM_PREFIX}${theirs}`]]
     expect(await (await call('/api/v1/products/acme/claim', json({}, { authorization: `Bearer ${dkey}` }))).json()).toMatchObject({ claimed: true, method: 'dns' })
+    expect(store.bySlug('acme')!.ownerId).toBe(mallory.id)
+  })
+
+  test('the badge id: one per listing and account; /images.svg?id renders it; your id claims and verifies, another account\'s only verifies', async () => {
+    let home = HOME
+    const web = fakeWeb({ 'https://acme.test/': () => new Response(home, { headers: { 'content-type': 'text/html' } }) })
+    const { call, store, txt } = setup(web)
+    await call('/submit', form({ url: 'acme.test' }))
+    const p = store.bySlug('acme')!
+    const owner = store.findOrCreateUser('owner@acme.test')
+    const mallory = store.findOrCreateUser('mallory@example.com')
+    const okey = store.newApiKey(owner.id)
+    const mkey = store.newApiKey(mallory.id)
+    const claimAs = async (key: string) => (await call('/api/v1/products/acme/claim', json({}, { authorization: `Bearer ${key}` }))).json()
+    const infoAs = async (key: string) => (await call('/api/v1/products/acme/claim', { headers: { authorization: `Bearer ${key}` } })).json()
+    // Stable per product + account, different across accounts, short and URL-safe.
+    const first = await infoAs(okey)
+    const id = first.badge.match(/images\.svg\?id=([A-Za-z0-9_-]+)/)![1]
+    expect(id).toMatch(/^[A-Za-z0-9_-]{16}$/)
+    expect((await infoAs(okey)).badge).toBe(first.badge)
+    expect(store.badgeId(p.id, owner.id)).toBe(id)
+    const theirs = store.badgeId(p.id, mallory.id)
+    expect(theirs).not.toBe(id)
+    expect((await infoAs(mkey)).badge).toContain(`images.svg?id=${theirs}`)
+    // The route renders the same live badge as /badge/<slug>.svg, with the same headers.
+    const img = await call(`/images.svg?id=${id}`)
+    const plain = await call('/badge/acme.svg')
+    expect(img.status).toBe(200)
+    expect(img.headers.get('content-type')).toBe(plain.headers.get('content-type'))
+    expect(img.headers.get('cache-control')).toBe('public, max-age=300')
+    expect(await img.text()).toBe(await plain.text())
+    expect((await call('/images.svg?id=nope')).status).toBe(404)
+    expect((await call('/images.svg')).status).toBe(404)
+    // An unknown id on the homepage does nothing.
+    home = HOME.replace('</body>', '<img src="https://built.indie.pit.world/images.svg?id=AAAAAAAAAAAAAAAA"></body>')
+    expect((await claimAs(okey)).claimed).toBe(false)
+    expect((await (await call('/api/v1/products/acme/verify', json({}))).json()).verified).toBe(false)
+    // Our id on someone else's host does nothing either.
+    home = HOME.replace('</body>', `<img src="https://evil.test/images.svg?id=${id}"></body>`)
+    expect((await claimAs(okey)).claimed).toBe(false)
+    // Mallory's badge (an image only, no link) verifies the listing but does not claim it for the owner.
+    home = HOME.replace('</body>', `<img src="https://built.indie.pit.world/images.svg?id=${theirs}"></body>`)
+    expect((await claimAs(okey)).claimed).toBe(false)
+    expect(store.bySlug('acme')!.ownerId).toBeNull()
+    expect((await (await call('/api/v1/products/acme/verify', json({}))).json()).verified).toBe(true)
+    expect(store.bySlug('acme')!.verifiedAt).toBeGreaterThan(0)
+    store.setVerified(p.id, null)
+    // The owner's own badge claims it and marks it verified in the same step.
+    home = HOME.replace('</body>', `${first.badge.replace('?id=', '?theme=light&amp;id=')}</body>`)
+    expect(await claimAs(okey)).toMatchObject({ claimed: true, method: 'badge' })
+    expect(store.bySlug('acme')!.ownerId).toBe(owner.id)
+    expect(store.bySlug('acme')!.verifiedAt).toBeGreaterThan(0)
+    // DNS still works for the other account.
+    home = HOME
+    txt['_built-indie.acme.test'] = [[`${CLAIM_PREFIX}${setupToken(store, mallory.id)}`]]
+    expect(await claimAs(mkey)).toMatchObject({ claimed: true, method: 'dns' })
     expect(store.bySlug('acme')!.ownerId).toBe(mallory.id)
   })
 

@@ -141,7 +141,7 @@ function submitForm(compact = false, values: Record<string, string> = {}, error?
     <label for="makerName">Your name</label><input id="makerName" name="makerName" maxlength="60" value="${esc(values.makerName ?? '')}">
     <label for="makerProfile">Your OpenProfile.md <span class="muted">URL, e.g. yoursite.com/.well-known/openprofile.md (<a href="https://logicsrc.com/openprofile">what is it?</a>)</span></label><input id="makerProfile" name="makerProfile" type="text" inputmode="url" value="${esc(values.makerProfile ?? '')}"${error?.field === 'makerProfile' ? ' aria-invalid="true"' : ''}>
   </details>`}
-  <p class="muted small">Free. We read the homepage: name, tagline, logo, screenshots, videos, socials, <code>llms.txt</code>, and the <a href="https://logicsrc.com/specs">LogicSRC</a> files: <code>opensite.json</code>, <code>openprofile.md</code>, <code>openstack.md</code>, <code>opensaas.json</code>, <code>openicon.json</code>. Anyone can launch any site; the owner claims it with a DNS record or the badge.</p>
+  <p class="muted small">Free. We read the homepage: name, tagline, logo, screenshots, videos, socials, <code>llms.txt</code>, and the <a href="https://logicsrc.com/specs">LogicSRC</a> files: <code>opensite.json</code>, <code>openprofile.md</code>, <code>openstack.md</code>, <code>opensaas.json</code>, <code>openicon.json</code>. Anyone can launch any site; the owner claims it with the badge or a DNS record.</p>
 </form>`
 }
 
@@ -204,9 +204,9 @@ export function badgeSnippet(origin: string, p: Product): string {
   return `<a href="${origin}/p/${p.slug}?ref=badge"><img src="${origin}/badge/${p.slug}.svg" alt="${p.name} on built.indie" width="200" height="44"></a>`
 }
 
-/** The badge with this account's claim token on it: placed on the homepage, it claims the listing (and earns the ✓). */
-export function claimBadgeSnippet(origin: string, p: Product, token: string): string {
-  return `<a href="${origin}/p/${p.slug}"><img src="${origin}/badge/${p.slug}.svg?claim=${token}" alt="Launched on built.indie" width="200" height="44"></a>`
+/** The badge with this account's badge id on it: placed on the homepage, it claims the listing (and earns the ✓). */
+export function claimBadgeSnippet(origin: string, p: Product, badgeId: string): string {
+  return `<a href="${origin}/p/${p.slug}"><img src="${origin}/images.svg?id=${badgeId}" alt="Launched on built.indie" width="200" height="44"></a>`
 }
 
 /** "Built with", from the product's own OpenStack.md. */
@@ -243,7 +243,7 @@ export function productPage(ctx: Ctx, d: { product: Product; award: { day: strin
     noindex: !live,
     ads: live,
     head: `<link rel="opensite" href="/p/${esc(p.slug)}/opensite.json"><link rel="alternate" type="text/markdown" title="OpenProfile" href="/p/${esc(p.slug)}/openprofile.md">`,
-    body: `${d.launched && live ? `<div class="note launched"><b>🚀 ${esc(p.name)} is live.</b> Today’s board resets at midnight UTC: share it now. ${p.ownerId ? '' : `Is it yours? <a href="/p/${esc(p.slug)}/claim">Claim it</a> with a DNS record to edit it and get the ✓.`}</div>` : ''}
+    body: `${d.launched && live ? `<div class="note launched"><b>🚀 ${esc(p.name)} is live.</b> Today’s board resets at midnight UTC: share it now. ${p.ownerId ? '' : `Is it yours? <a href="/p/${esc(p.slug)}/claim">Claim it</a> with your badge (or a DNS record) to edit it and get the ✓.`}</div>` : ''}
 ${d.featuredOk ? '<p class="note">Thanks! Your payment is on its way; the Featured spot starts the moment CoinPay confirms it.</p>' : ''}
 ${!live ? `<p class="note">${p.status === 'draft' ? 'Draft: only people with the edit link see this.' : 'Taken down.'}</p>` : ''}
 <section class="product-head">
@@ -312,7 +312,7 @@ export function editPage(ctx: Ctx, d: { product: Product; fresh?: boolean; flash
     description: 'Edit your launch.',
     path: `/p/${p.slug}/edit`,
     noindex: true,
-    body: `${d.fresh ? `<p class="note">Here is what we read from ${esc(p.domain)}. Fix anything, then launch. It is in <a href="/me">your launches</a>${p.ownerId ? '' : `; <a href="/p/${esc(p.slug)}/claim">claim it</a> with a DNS record so it stays yours`}.</p>` : ''}
+    body: `${d.fresh ? `<p class="note">Here is what we read from ${esc(p.domain)}. Fix anything, then launch. It is in <a href="/me">your launches</a>${p.ownerId ? '' : `; <a href="/p/${esc(p.slug)}/claim">claim it</a> with your badge or a DNS record so it stays yours`}.</p>` : ''}
 ${d.flash ? `<p class="note">${esc(d.flash)}</p>` : ''}
 ${d.error ? `<p class="note error" role="alert">${esc(d.error.message)}</p>` : ''}
 <h1 class="page-h">${p.status === 'draft' ? 'Check it, then launch' : `Edit ${esc(p.name)}`}</h1>
@@ -343,11 +343,29 @@ ${d.error ? `<p class="note error" role="alert">${esc(d.error.message)}</p>` : '
 export function claimMarkdown(origin: string, p: Product, record: { name: string; value: string }, badge: string): string {
   const bare = p.domain.replace(/^www\./, '')
   const label = record.name.slice(0, -(bare.length + 1))
-  return `# Claim ${p.name} on built.indie: one DNS TXT record, or the badge on the homepage
+  const id = badge.match(/images\.svg\?id=([A-Za-z0-9_-]+)/)?.[1] ?? ''
+  return `# Claim ${p.name} on built.indie: the badge on the homepage, or one DNS TXT record
 
-Prove control of \`${bare}\` so the listing ${origin}/p/${p.slug} can be claimed and edited. Either proof works; do whichever you have access to.
+Prove control of \`${bare}\` so the listing ${origin}/p/${p.slug} can be claimed and edited. Either proof works; the badge is the easy one.
 
-## Option A: the DNS record
+## Option A (easiest): the badge on the homepage
+
+Put this HTML on the homepage, ${p.url}, and deploy it:
+
+\`\`\`html
+${badge}
+\`\`\`
+
+It shows the live built.indie badge, and its id (\`${id}\`) is unique to this listing and this built.indie account, so finding it on the homepage proves the site is yours. It also makes your link on built.indie a followed link and earns the ✓, in the same step. The badge must be served in the HTML of the homepage itself (not added later by JavaScript). Check with:
+
+\`\`\`sh
+curl -s ${p.url} | grep -o 'images.svg?id=[A-Za-z0-9_-]*'
+# expect: images.svg?id=${id}
+\`\`\`
+
+Then finish the claim (below). Keep the badge up for the followed link.
+
+## Option B: a DNS TXT record
 
 | Field | Value |
 | --- | --- |
@@ -369,23 +387,9 @@ The same TXT value on \`${bare}\` itself also works, if a \`${label}\` name is n
    # expect: "${record.value}"
    \`\`\`
 
-4. Finish the claim (below).
+4. Finish the claim (below). The record can be removed once the claim succeeds.
 
-## Option B: the badge on the homepage
-
-No DNS access? Put this HTML on the homepage, ${p.url}, and deploy it:
-
-\`\`\`html
-${badge}
-\`\`\`
-
-It shows the live built.indie badge, and the \`claim=\` token in its URL proves the site is yours. It also makes your link on built.indie a followed link and earns the ✓. The token must be served in the HTML of the homepage itself (not added later by JavaScript). Check with:
-
-\`\`\`sh
-curl -s ${p.url} | grep -o 'claim=[A-Za-z0-9_-]*'
-\`\`\`
-
-A \`<meta name="built-indie-verify" content="${record.value}">\` tag (the bare \`${record.value}\` string anywhere in the HTML) also counts.
+A \`<meta name="built-indie-verify" content="${record.value}">\` tag (the bare \`${record.value}\` string anywhere in the homepage HTML) also counts.
 
 ## Finish the claim
 
@@ -394,9 +398,10 @@ Any one of:
    - \`BUILTINDIE_KEY=bi_… builtindie claim ${p.slug}\`
    - \`curl -X POST ${origin}/api/v1/products/${p.slug}/claim -H 'authorization: Bearer bi_…'\` (answers \`{"claimed": true}\`)
 
-We check DNS first, then the homepage. The token is tied to one built.indie account: a record or badge made for another account will not claim it for this one. The record can be removed once the claim succeeds; keep the badge for the followed link.
+We check DNS, then the homepage. The badge id and the record are tied to one built.indie account: a badge or record made for another account will not claim it for this one.
 `
 }
+
 
 export function claimPage(ctx: Ctx, d: { product: Product; record: { name: string; value: string }; badge: string; owner: boolean; result?: { ok: boolean; looked: string[]; method?: string } }): string {
   const p = d.product
@@ -405,33 +410,33 @@ export function claimPage(ctx: Ctx, d: { product: Product; record: { name: strin
   return layout({
     ctx,
     title: `Claim ${p.name} · built.indie`,
-    description: `Prove you own ${p.domain} with a DNS record or the badge.`,
+    description: `Prove you own ${p.domain} with the badge or a DNS record.`,
     path: `/p/${p.slug}/claim`,
     noindex: true,
     body: `<h1 class="page-h">${done ? `${esc(p.name)} is yours ✓` : `Claim ${esc(p.name)}`}</h1>
 ${done ? `<p class="note">You own this listing${d.result?.method === 'badge' ? ' (we found your badge)' : ''}. <a href="/p/${esc(p.slug)}/edit">Edit it</a>${d.result?.method === 'badge' ? '' : `, then add the <a href="/p/${esc(p.slug)}#badge">badge</a>`}.</p>` : `
 ${p.ownerId ? '<p class="note">Someone already claimed this listing. If you own the domain, adding your record below moves it to you.</p>' : ''}
-${d.result && !d.result.ok ? `<p class="note error" role="alert">We did not find the record or the badge yet at ${d.result.looked.map((n) => `<code>${esc(n)}</code>`).join(' or ')}. DNS can take a few minutes; try again.</p>` : ''}
-<p class="muted">Prove you control <b>${esc(p.domain)}</b>, either way: add a TXT record at your DNS host, or put your badge on the homepage. Then check.</p>
+${d.result && !d.result.ok ? `<p class="note error" role="alert">We did not find the badge or the record yet at ${d.result.looked.map((n) => `<code>${esc(n)}</code>`).join(' or ')}. DNS can take a few minutes; try again.</p>` : ''}
+<p class="muted">Prove you control <b>${esc(p.domain)}</b>, either way: put your badge on the homepage (easiest), or add a TXT record at your DNS host. Then check.</p>
+<div class="card" id="badge-claim">
+  <h2 class="mini-h">1. The badge on your homepage (easiest)</h2>
+  <p class="muted small">Put this badge on <b>${esc(p.url)}</b> and deploy. Its id is yours alone, so it proves the site is yours, and it also makes your link here a followed link and earns the ✓, in one step. It must be in the page’s HTML, not added by JavaScript.</p>
+  <p><img src="/badge/${esc(p.slug)}.svg" alt="badge" width="200" height="44"></p>
+  <pre><code>${esc(d.badge)}</code></pre>
+  <div class="row"><button class="chip" data-copy="${esc(d.badge)}">Copy badge HTML</button></div>
+</div>
 <div class="card">
-  <h2 class="mini-h">1. A DNS record</h2>
+  <h2 class="mini-h">2. Or a DNS record</h2>
   <p class="small muted">Type</p><p><code>TXT</code></p>
   <p class="small muted">Name / host</p><div class="address"><code>${esc(d.record.name)}</code><button class="copy" data-copy="${esc(d.record.name.replace(`.${p.domain.replace(/^www\./, '')}`, ''))}">Copy</button></div>
   <p class="small muted">Some DNS hosts want only <code>_built-indie</code> here; others want the full name.</p>
   <p class="small muted">Value</p><div class="address"><code>${esc(d.record.value)}</code><button class="copy" data-copy="${esc(d.record.value)}">Copy</button></div>
   <p class="small muted">A TXT record on ${esc(p.domain.replace(/^www\./, ''))} itself with the same value works too. You can remove it once claimed.</p>
 </div>
-<div class="card" id="badge-claim">
-  <h2 class="mini-h">2. Or the badge on your homepage</h2>
-  <p class="muted small">No DNS access? Put this badge on <b>${esc(p.url)}</b> and deploy. The <code>claim=</code> token proves it is yours, and the badge also makes your link here a followed link and earns the ✓. It must be in the page’s HTML, not added by JavaScript.</p>
-  <p><img src="/badge/${esc(p.slug)}.svg" alt="badge" width="200" height="44"></p>
-  <pre><code>${esc(d.badge)}</code></pre>
-  <div class="row"><button class="chip" data-copy="${esc(d.badge)}">Copy badge HTML</button></div>
-</div>
-<form method="post" action="/p/${esc(p.slug)}/claim" data-busy="Checking DNS and your homepage…"><button class="btn">Check</button></form>
+<form method="post" action="/p/${esc(p.slug)}/claim" data-busy="Checking your homepage and DNS…"><button class="btn">Check</button></form>
 <div class="card">
-  <h2 class="mini-h">${icon('terminal')} Have an AI do the DNS</h2>
-  <p class="muted small">Copy these instructions as Markdown and paste them to an agent (or a person) with access to your DNS. They hold your record and your badge, how to check them, and how to finish the claim.</p>
+  <h2 class="mini-h">${icon('terminal')} Have an AI do it</h2>
+  <p class="muted small">Copy these instructions as Markdown and paste them to an agent (or a person) with access to your site or your DNS. They hold your badge and your record, how to check them, and how to finish the claim.</p>
   <div class="row"><button class="chip" data-copy="${esc(md)}">Copy as Markdown for AI</button><a class="chip" href="/p/${esc(p.slug)}/claim.md">Open as .md</a></div>
   <details><summary class="small">Preview</summary><pre><code>${esc(md)}</code></pre></details>
 </div>`}`,
@@ -496,7 +501,7 @@ export function helpPage(ctx: Ctx): string {
     description: 'Launch, read and upvote from code: a JSON API, a CLI, a TUI and an MCP server.',
     path: '/help',
     body: `<h1 class="page-h">Launch from anywhere</h1>
-<p class="muted">Everything on the site is an API. Launching and reading need nothing. To edit, sign in, claim your product with a DNS record or by putting your badge on its homepage, and make an API key on <a href="/me">your page</a>.</p>
+<p class="muted">Everything on the site is an API. Launching and reading need nothing. To edit, sign in, claim your product by putting your badge on its homepage (or with a DNS record), and make an API key on <a href="/me">your page</a>.</p>
 <div class="card"><h2>API</h2>
 <pre>curl -X POST ${o}/api/v1/products -H 'content-type: application/json' \\
   -d '{"url":"yourproduct.com","maker_name":"You"}'
@@ -506,13 +511,13 @@ curl ${o}/api/v1/products?window=today      # today|week|month|all|new|featured
 curl ${o}/api/v1/products/&lt;slug&gt;
 curl -X POST ${o}/api/v1/products/&lt;slug&gt;/vote
 curl -X POST ${o}/api/v1/preview -d '{"url":"any.site"}' -H 'content-type: application/json'
-curl ${o}/api/v1/products/&lt;slug&gt;/claim -H 'authorization: Bearer bi_…'   # the TXT record, or the badge with your claim token
-curl -X POST ${o}/api/v1/products/&lt;slug&gt;/claim -H 'authorization: Bearer bi_…'   # check DNS, then the badge on your homepage
+curl ${o}/api/v1/products/&lt;slug&gt;/claim -H 'authorization: Bearer bi_…'   # your badge (with your badge id), or the TXT record
+curl -X POST ${o}/api/v1/products/&lt;slug&gt;/claim -H 'authorization: Bearer bi_…'   # check for the badge on your homepage, or DNS
 curl -X PATCH ${o}/api/v1/products/&lt;slug&gt; -H 'authorization: Bearer bi_…' \\
   -H 'content-type: application/json' -d '{"tagline":"…","videos":["https://youtu.be/…"]}'
 curl -X POST ${o}/api/v1/products/&lt;slug&gt;/refetch -H 'authorization: Bearer bi_…'
 curl -X POST ${o}/api/v1/products/&lt;slug&gt;/publish -H 'authorization: Bearer bi_…'</pre>
-<p class="muted small">Claiming: the badge works as a claim too. <code>GET …/claim</code> answers a <code>badge</code> snippet next to the <code>record</code>; put it on your homepage (<code>&lt;img src="${o}/badge/&lt;slug&gt;.svg?claim=&lt;token&gt;"&gt;</code>) and the <code>POST</code> answers <code>{"claimed": true, "method": "badge"}</code>. It also earns the followed link and the ✓.</p>
+<p class="muted small">Claiming, the easy way: the badge. <code>GET …/claim</code> answers a <code>badge</code> snippet next to the DNS <code>record</code>; put it on your homepage (<code>&lt;img src="${o}/images.svg?id=&lt;id&gt;"&gt;</code>, the id is yours for that listing) and the <code>POST</code> answers <code>{"claimed": true, "method": "badge"}</code>. It also earns the followed link and the ✓ in the same step.</p>
 <p class="muted small">OpenSite (logicsrc.com/docs/opensite): <code>GET /api/v1/sites?url=…</code>, <code>POST /api/v1/sites</code>, and every product at <code>/p/&lt;slug&gt;/opensite.json</code>. OpenProfile: <code>/p/&lt;slug&gt;/openprofile.md</code>, <code>/makers/&lt;id&gt;/openprofile.md</code>.</p></div>
 <div class="card" id="cli"><h2>CLI and TUI</h2>
 <pre>curl -fsSL ${o}/install.sh | sh                # installs builtindie
@@ -522,7 +527,7 @@ bunx @profullstack/builtindie launch yourproduct.com
 bunx @profullstack/builtindie top week
 bunx @profullstack/builtindie show &lt;slug&gt;
 bunx @profullstack/builtindie vote &lt;slug&gt;
-BUILTINDIE_KEY=bi_… bunx @profullstack/builtindie claim &lt;slug&gt;   # TXT record or badge, then checks it
+BUILTINDIE_KEY=bi_… bunx @profullstack/builtindie claim &lt;slug&gt;   # your badge (or a TXT record), then checks it
 bunx @profullstack/builtindie preview any.site --json</pre></div>
 <div class="card" id="mcp"><h2>MCP</h2>
 <pre>claude mcp add builtindie -- bunx @profullstack/builtindie mcp</pre>
