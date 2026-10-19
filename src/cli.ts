@@ -28,7 +28,8 @@ export const HELP = `builtindie ${VERSION}: launch your indie product with one U
   builtindie vote <slug>
   builtindie preview <url>            what we read from a site; nothing is saved
   builtindie search <words>
-  builtindie claim <slug>             the DNS TXT record that proves it is yours, then checks it
+  builtindie claim <slug> [--md]      the DNS TXT record that proves it is yours, then checks it;
+                                      --md prints the steps as Markdown to paste to an AI with DNS access
   builtindie me                       your launches
   builtindie edit <slug> [--name --tagline --description --tags a,b --video URL]
   builtindie refetch <slug>           read the homepage again
@@ -53,7 +54,7 @@ export function parseArgs(argv: string[]): { words: string[]; flags: Record<stri
     if (a.startsWith('--')) {
       const [k, v] = a.slice(2).split(/=(.*)/s) as [string, string | undefined]
       if (v !== undefined) flags[k] = v
-      else if (argv[i + 1] !== undefined && !argv[i + 1]!.startsWith('--') && !['json', 'draft'].includes(k)) flags[k] = argv[++i]!
+      else if (argv[i + 1] !== undefined && !argv[i + 1]!.startsWith('--') && !['json', 'draft', 'md'].includes(k)) flags[k] = argv[++i]!
       else flags[k] = true
     } else words.push(a)
   }
@@ -172,6 +173,11 @@ export async function main(argv = process.argv.slice(2), out: Out = console, cli
       }
       case 'claim': {
         const slug = rest[0] ?? ''
+        if (flags.md) {
+          const r = await client.claimRecord(slug)
+          out.log(json ? JSON.stringify(r, null, 2) : r.markdown)
+          return 0
+        }
         const r = await client.claim(slug)
         if (r.claimed) return show(r, `${slug} is yours ✓. Edit it: builtindie edit ${slug} --tagline "…"`), 0
         show(r, `Add this DNS record, wait a minute, then run builtindie claim ${slug} again:\n\n  type   TXT\n  name   ${r.record.name}\n  value  ${r.record.value}\n\n(not found yet at ${r.looked.join(', ')})`)

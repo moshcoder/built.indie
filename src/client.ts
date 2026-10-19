@@ -89,11 +89,11 @@ export class BuiltIndieClient {
     return k
   }
 
-  claimRecord(slug: string): Promise<{ owner: boolean; record: ClaimRecord }> {
+  claimRecord(slug: string): Promise<{ owner: boolean; record: ClaimRecord; markdown: string }> {
     return this.call('GET', `/api/v1/products/${encodeURIComponent(slug)}/claim`, undefined, this.needKey())
   }
 
-  claim(slug: string): Promise<{ claimed: boolean; looked: string[]; record: ClaimRecord }> {
+  claim(slug: string): Promise<{ claimed: boolean; looked: string[]; record: ClaimRecord; markdown?: string }> {
     return this.call('POST', `/api/v1/products/${encodeURIComponent(slug)}/claim`, {}, this.needKey())
   }
 
