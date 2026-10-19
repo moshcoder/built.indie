@@ -51,13 +51,16 @@ export const CLAIM_PREFIX = 'built-indie-verify='
  * TXT records as public resolvers see them: every answer from 1.1.1.1 and 9.9.9.9, merged.
  * One Resolver per server on purpose: Bun 1.4's node:dns Resolver given two servers
  * answers ENOTFOUND for a record each of them serves alone, so no claim could succeed.
+ * And fresh Resolvers per lookup: a long-lived one caches NXDOMAIN for the zone's SOA
+ * minimum (often 30 min), so a maker who checks before adding the record stays refused.
  */
-const PUBLIC_DNS = ['1.1.1.1', '9.9.9.9'].map((server) => {
-  const r = new Resolver({ timeout: 4000, tries: 2 })
-  r.setServers([server])
-  return r
-})
-export async function publicTxt(name: string, resolvers: Pick<Resolver, 'resolveTxt'>[] = PUBLIC_DNS): Promise<string[][]> {
+const publicDns = () =>
+  ['1.1.1.1', '9.9.9.9'].map((server) => {
+    const r = new Resolver({ timeout: 4000, tries: 2 })
+    r.setServers([server])
+    return r
+  })
+export async function publicTxt(name: string, resolvers: Pick<Resolver, 'resolveTxt'>[] = publicDns()): Promise<string[][]> {
   const answers = await Promise.all(resolvers.map((r) => r.resolveTxt(name).catch(() => [] as string[][])))
   return answers.flat()
 }
