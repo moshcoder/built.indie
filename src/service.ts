@@ -5,7 +5,7 @@
  *   submit   URL in, a listing out: everything fetched, pictures saved. Free.
  *            Anonymous launches go live at once; a signed-in submitter checks a draft first.
  *   publish  the draft goes live on today's board
- *   claim    the domain's owner proves it with a DNS TXT record and takes the listing
+ *   claim    the domain's owner proves it (a DNS TXT record, or the badge with their token) and takes the listing
  *   refetch  read the homepage again (the maker changed their logo)
  *   verify   the maker put our badge on their site: a followed link back
  *   feature  pay in crypto (CoinPay) to sit on top for a week
@@ -129,22 +129,60 @@ export class BuiltIndie {
     return createHmac('sha256', this.config.claimSecret ?? 'built.indie').update(`claim:${user.id}:${p.domain}`).digest('base64url').slice(0, 24)
   }
 
-  /** Look for the claim record at _built-indie.<domain>, then on the domain itself (and its apex for www). */
-  async claim(p: Product, user: User): Promise<{ ok: boolean; looked: string[] }> {
+  /**
+   * Two proofs, either one claims it: the TXT record at _built-indie.<domain> (or on the
+   * domain itself, and its apex for www), or, failing DNS, our badge on the homepage
+   * carrying this person's token (`/badge/<slug>.svg?claim=<token>`, or the bare
+   * `built-indie-verify=<token>` anywhere in the HTML, e.g. a meta tag). A badge that
+   * claims also earns the followed link and the ✓, as `verify` would.
+   */
+  async claim(p: Product, user: User): Promise<{ ok: boolean; looked: string[]; method?: 'dns' | 'badge' }> {
     if (p.status === 'hidden') throw new InputError('This product was taken down.')
     if (p.ownerId === user.id) return { ok: true, looked: [] }
-    const want = `${CLAIM_PREFIX}${this.claimToken(p, user)}`
+    const token = this.claimToken(p, user)
+    const want = `${CLAIM_PREFIX}${token}`
     const bare = p.domain.replace(/^www\./, '')
     const names = [...new Set([`${CLAIM_LABEL}.${bare}`, bare, p.domain])]
+    const looked = [...names, p.url]
     const lookup = this.config.resolveTxt ?? publicTxt
     for (const name of names) {
       const records = await lookup(name).catch(() => [] as string[][])
       if (records.some((chunks) => chunks.join('').trim() === want)) {
         this.store.claim(p.id, user.id)
-        return { ok: true, looked: names }
+        return { ok: true, looked, method: 'dns' }
       }
     }
-    return { ok: false, looked: names }
+    const html = await this.homepage(p)
+    if (this.hasClaimBadge(html, token)) {
+      this.store.claim(p.id, user.id)
+      if (this.linksBack(html)) this.store.setVerified(p.id, Date.now())
+      return { ok: true, looked, method: 'badge' }
+    }
+    return { ok: false, looked }
+  }
+
+  /** The product's homepage HTML, read the safe way (no private addresses, robots honoured); '' if it will not load. */
+  private async homepage(p: Product): Promise<string> {
+    const r = await safeFetch(p.url, { ...this.config.fetch, accept: 'text/html' }).catch(() => null)
+    return r && r.status < 300 ? new TextDecoder().decode(r.body) : ''
+  }
+
+  private ourHosts(): string {
+    return `(?:${new URL(this.config.origin).hostname.replace(/\./g, '\\.')}|built\\.indie)`
+  }
+
+  /** A followed-link-worthy link back to us. */
+  private linksBack(html: string): boolean {
+    return new RegExp(`href=["']?https?://${this.ourHosts()}(/|["'])`, 'i').test(html)
+  }
+
+  /** A link or image on our host whose URL carries claim=<token>, or the bare verify string anywhere. */
+  private hasClaimBadge(html: string, token: string): boolean {
+    if (!html) return false
+    const exact = (prefix: string) => new RegExp(`${prefix}${token}(?![A-Za-z0-9_-])`)
+    if (exact(CLAIM_PREFIX).test(html)) return true
+    const urls = html.matchAll(new RegExp(`(?:href|src)\\s*=\\s*["']?((?:https?:)?//${this.ourHosts()}/[^"'\\s>]*)`, 'gi'))
+    return [...urls].some((m) => exact('[?&](?:amp;)?claim=').test(m[1]!))
   }
 
   private async read(url: string): Promise<SiteInfo> {
@@ -251,10 +289,7 @@ export class BuiltIndie {
 
   /** Has the maker linked back to us from their homepage? */
   async verify(p: Product): Promise<boolean> {
-    const r = await safeFetch(p.url, { ...this.config.fetch, accept: 'text/html' }).catch(() => null)
-    const html = r && r.status < 300 ? new TextDecoder().decode(r.body) : ''
-    const ours = new URL(this.config.origin).hostname
-    const ok = new RegExp(`href=["']?https?://(${ours.replace(/\./g, '\\.')}|built\\.indie)(/|["'])`, 'i').test(html)
+    const ok = this.linksBack(await this.homepage(p))
     this.store.setVerified(p.id, ok ? Date.now() : null)
     return ok
   }

@@ -8,7 +8,7 @@
  *   builtindie vote <slug>
  *   builtindie preview <url>           what we would read from a site, nothing saved
  *   builtindie search <words>
- *   builtindie claim <slug>            prove you own the domain (DNS TXT), BUILTINDIE_KEY
+ *   builtindie claim <slug>            prove you own the domain (DNS TXT or the badge), BUILTINDIE_KEY
  *   builtindie me                      your launches, BUILTINDIE_KEY
  *   builtindie edit <slug> --tagline … (BUILTINDIE_KEY)
  *   builtindie refetch <slug>          (BUILTINDIE_KEY)
@@ -28,8 +28,9 @@ export const HELP = `builtindie ${VERSION}: launch your indie product with one U
   builtindie vote <slug>
   builtindie preview <url>            what we read from a site; nothing is saved
   builtindie search <words>
-  builtindie claim <slug> [--md]      the DNS TXT record that proves it is yours, then checks it;
-                                      --md prints the steps as Markdown to paste to an AI with DNS access
+  builtindie claim <slug> [--md]      the DNS TXT record (or the badge for your homepage) that proves
+                                      it is yours, then checks both; --md prints the steps as Markdown
+                                      to paste to an AI with DNS or site access
   builtindie me                       your launches
   builtindie edit <slug> [--name --tagline --description --tags a,b --video URL]
   builtindie refetch <slug>           read the homepage again
@@ -179,8 +180,8 @@ export async function main(argv = process.argv.slice(2), out: Out = console, cli
           return 0
         }
         const r = await client.claim(slug)
-        if (r.claimed) return show(r, `${slug} is yours ✓. Edit it: builtindie edit ${slug} --tagline "…"`), 0
-        show(r, `Add this DNS record, wait a minute, then run builtindie claim ${slug} again:\n\n  type   TXT\n  name   ${r.record.name}\n  value  ${r.record.value}\n\n(not found yet at ${r.looked.join(', ')})`)
+        if (r.claimed) return show(r, `${slug} is yours ✓${r.method === 'badge' ? ' (we found your badge)' : r.method === 'dns' ? ' (we found your DNS record)' : ''}. Edit it: builtindie edit ${slug} --tagline "…"`), 0
+        show(r, `Prove it either way, then run builtindie claim ${slug} again:\n\n1. Add this DNS record (wait a minute for it to show):\n\n  type   TXT\n  name   ${r.record.name}\n  value  ${r.record.value}\n\n2. Or put this badge on your homepage and deploy (it also earns the followed link and the ✓):\n\n  ${r.badge}\n\n(not found yet at ${r.looked.join(', ')})`)
         return 1
       }
       case 'me': {
