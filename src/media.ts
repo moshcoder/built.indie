@@ -139,7 +139,9 @@ export function screenshot(url: string, chrome = findChrome(), timeoutMs = 35_00
         '--disable-extensions', '--disable-sync', '--disable-background-networking', '--deny-permission-prompts',
         `--user-data-dir=${join(dir, 'profile')}`, '--window-size=1280,800', '--virtual-time-budget=6000', `--screenshot=${join(dir, 'shot.png')}`, target,
       ]
-      const [cmd, argv] = root ? ['runuser', ['-u', 'nobody', '--', 'env', `HOME=${dir}`, chrome, ...args]] : [chrome, args]
+      // runuser lives in /usr/sbin, which a service's PATH often leaves out.
+      const runuser = ['/usr/sbin/runuser', '/sbin/runuser', '/usr/bin/runuser'].find((p) => existsSync(p)) ?? 'runuser'
+      const [cmd, argv] = root ? [runuser, ['-u', 'nobody', '--', '/usr/bin/env', `HOME=${dir}`, chrome, ...args]] : [chrome, args]
       await new Promise<void>((resolve) => {
         const child = spawn(cmd, argv as string[], { stdio: 'ignore' })
         const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs)
