@@ -81,8 +81,8 @@ export class BuiltIndie {
     return `${this.config.origin}/p/${p.slug}`
   }
 
-  /** Read the URL and make a draft. A URL already live comes back as `existing` instead. */
-  async submit(input: { url: string; makerName?: string; makerProfile?: string }, submitter: string, user: User | null = null): Promise<{ product: Product; existing: boolean }> {
+  /** Read the URL and make a draft. A URL already live comes back as `existing` instead. `unlimited` (the admin) skips the hourly cap. */
+  async submit(input: { url: string; makerName?: string; makerProfile?: string }, submitter: string, user: User | null = null, unlimited = false): Promise<{ product: Product; existing: boolean }> {
     let url: URL
     try {
       url = normalizeUrl(input.url)
@@ -91,7 +91,7 @@ export class BuiltIndie {
     }
     const already = this.store.byUrl(url.href)
     if (already?.status === 'live') return { product: already, existing: true }
-    if (this.store.submissionsFrom(submitter, Date.now() - 3600_000) >= 10) throw new InputError('That is a lot of launches in an hour. Try again later.')
+    if (!unlimited && this.store.submissionsFrom(submitter, Date.now() - 3600_000) >= 10) throw new InputError('That is a lot of launches in an hour. Try again later.')
     const info = await this.read(url.href)
     const id = newId()
     const pictures = await this.pictures(id, info)

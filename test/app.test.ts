@@ -327,6 +327,18 @@ describe('the site', () => {
     expect(store.bySlug('acme')!.status).toBe('hidden')
     expect((await call('/p/acme')).status).toBe(404)
   })
+
+  test('the admin may launch a whole portfolio at once; anyone else is capped', async () => {
+    const sites: Record<string, () => Response> = {}
+    for (let i = 0; i < 40; i++) sites[`https://s${i}.test/`] = () => new Response(`<html><head><title>Site ${i}</title></head><body></body></html>`, { headers: { 'content-type': 'text/html' } })
+    const { call } = setup(fakeWeb(sites))
+    const admin = { authorization: 'Bearer admin-key-0123456789' }
+    for (let i = 0; i < 25; i++) expect((await call('/api/v1/products', json({ url: `s${i}.test` }, admin))).status).toBe(201)
+    const statuses: number[] = []
+    for (let i = 25; i < 37; i++) statuses.push((await call('/api/v1/products', json({ url: `s${i}.test` }, { authorization: 'Bearer wrong' }), '5.6.7.8')).status)
+    expect(statuses.slice(0, 10).every((s) => s === 201)).toBe(true)
+    expect(statuses.slice(10).every((s) => s >= 400)).toBe(true)
+  })
 })
 
 /** The claim token the service would hand this user for acme.test. */
