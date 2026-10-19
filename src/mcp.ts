@@ -71,6 +71,8 @@ export function createMcpServer(client = new BuiltIndieClient()): McpServer {
     wrap((a: { slug: string }) => client.claim(a.slug)),
   )
   server.tool('my_products', 'Your launches and claims (needs BUILTINDIE_KEY).', {}, wrap(() => client.me()))
+  server.tool('my_invites', 'Your invite link and credits (needs BUILTINDIE_KEY). Each new member who signs up through the link and launches a listing earns one credit: a free Featured week.', {}, wrap(() => client.invites()))
+  server.tool('feature_with_credit', 'Spend one invite credit to feature a listing you own for a week (needs BUILTINDIE_KEY).', { slug }, wrap((a: { slug: string }) => client.credit(a.slug)))
   return server
 }
 

@@ -32,6 +32,8 @@ export type ApiProduct = {
   award?: { day: string; rank: number } | null
 }
 
+export type Invites = { link: string; code: string; invited: number; launched: number; credits: number; used: number; feature_days: number }
+
 export type Launched = { product: ApiProduct; claim_url?: string; existing?: boolean }
 export type ClaimRecord = { type: string; name: string; value: string }
 
@@ -97,8 +99,18 @@ export class BuiltIndieClient {
     return this.call('POST', `/api/v1/products/${encodeURIComponent(slug)}/claim`, {}, this.needKey())
   }
 
-  me(): Promise<{ email: string; products: (ApiProduct & { owner: boolean })[] }> {
+  me(): Promise<{ email: string; products: (ApiProduct & { owner: boolean })[]; invite: Invites }> {
     return this.call('GET', '/api/v1/me', undefined, this.needKey())
+  }
+
+  /** Your invite link and credits: each new member it brings in who launches earns a free Featured week. */
+  invites(): Promise<Invites> {
+    return this.call('GET', '/api/v1/invites', undefined, this.needKey())
+  }
+
+  /** Spend one invite credit to feature a listing you own. */
+  credit(slug: string): Promise<{ featured_until: string; credits: number }> {
+    return this.call('POST', `/api/v1/products/${encodeURIComponent(slug)}/credit`, {}, this.needKey())
   }
 
   edit(slug: string, patch: Record<string, unknown>, key?: string): Promise<ApiProduct> {

@@ -18,6 +18,10 @@ Then it goes on today's board. People upvote (one per visitor). The board resets
 
 Viral bits: a live badge with the upvote count (`/badge/<slug>.svg`) that turns a link back into a followed link and a ✓ once we see it on the homepage, share buttons, an OG card per product, RSS, and an optional crypto-paid **Featured** slot (CoinPay).
 
+**Invite program.** Every account has an invite link, `/i/<code>` (on `/invite`, `/me`, `builtindie invite`, `GET /api/v1/invites`, MCP `my_invites`). When a new member who signed up through it gets their first listing live, the inviter earns a credit: a free **Featured** week (the same slot that costs $19 in crypto). Spend it on any listing you own from `/invite`, the listing's page, `builtindie credit <slug>`, `POST /api/v1/products/<slug>/credit` or MCP `feature_with_credit`. Once per new member, never yourself; the code rides in the magic link, so it counts when the mail opens in another browser; an admin takedown of the listing takes back an unspent credit. The inviter gets an email when a credit lands.
+
+**Leaderboard.** `/leaderboard` ranks the top inviters (week, month, all time) with badges, on [@profullstack/leaderboard](https://github.com/profullstack/leaderboard). It projects the `invites` table, so there is no second ledger; badges live in the `lb_` tables of the same database. The package also serves `/leaderboard.json`, `/leaderboard/invites.json|.xml`, a share card per member at `/leaderboard/u/<id>`, and a widget any site can embed (`/leaderboard/embed.js`). Members appear by the name they set on `/invite`, else as "Maker of <their best listing>"; never by email.
+
 Every product is published back as an OpenSite record (`/p/<slug>/opensite.json`) and an OpenProfile (`/p/<slug>/openprofile.md`); makers are OpenProfiles too (`/makers/<id>/openprofile.md`). Icons are the [OpenIcon](https://github.com/profullstack/openicon) reference set.
 
 ## Surfaces
@@ -33,6 +37,8 @@ builtindie vote linear
 builtindie preview any.site --json
 BUILTINDIE_KEY=bi_… builtindie claim linear   # prints your badge and the TXT record, then checks them
 BUILTINDIE_KEY=bi_… builtindie edit linear --tagline "…"
+BUILTINDIE_KEY=bi_… builtindie invite          # your invite link and free Featured credits
+BUILTINDIE_KEY=bi_… builtindie credit linear   # spend one: Featured for a week
 
 claude mcp add builtindie -- bunx @profullstack/builtindie mcp
 ```

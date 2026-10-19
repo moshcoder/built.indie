@@ -89,7 +89,7 @@ function setup(web = fakeWeb(), txt: Record<string, string[][]> = {}) {
   })
   const mail: Mail[] = []
   const auth = new Auth(store, async (m) => void mail.push(m))
-  const app = createApp({ service, auth, adminKey: 'admin-key-0123456789', secureCookies: false })
+  const app = createApp({ service, auth, adminKey: 'admin-key-0123456789', secureCookies: false, mailer: async (m) => void mail.push(m) })
   const call = (path: string, init: RequestInit = {}, ip = '1.2.3.4') => app.fetch(new Request(`http://localhost${path}`, init), { ip })
   return { store, service, app, call, mail, web, txt }
 }
@@ -493,5 +493,90 @@ describe('plumbing', () => {
     expect(onKey(s, { name: 'enter', key: 'enter' })).toBe('launch')
     s.typing = null
     expect(onKey(s, { name: 'q', key: 'q', char: 'q' })).toBe('quit')
+  })
+})
+
+describe('invites', () => {
+  const BETA = `<!doctype html><html><head><title>Beta: a second product</title><meta name="description" content="Beta does a second thing well."></head><body><h1>Beta</h1></body></html>`
+  const signIn = async (call: ReturnType<typeof setup>['call'], mail: Mail[], email: string, cookie = '') => {
+    await call('/login', { ...form({ email }), headers: { ...form({}).headers, ...(cookie ? { cookie } : {}) } })
+    const token = mail.at(-1)!.text.match(/token=([\w-]+)/)![1]!
+    // Opened in another browser on purpose: no invite cookie here, the code rides in the link.
+    return (await call(`/auth/verify?token=${token}`)).headers.get('set-cookie')!.split(';')[0]!
+  }
+
+  test('a new member who joins through your link and launches earns you a free Featured week; the board and the homepage show it', async () => {
+    const { call, mail, store } = setup(fakeWeb({ 'https://beta.test/': new Response(BETA, { headers: { 'content-type': 'text/html' } }) }))
+    const as = (cookie: string, init: RequestInit = {}) => ({ ...init, headers: { ...(init.headers as Record<string, string>), cookie } })
+    const ann = await signIn(call, mail, 'ann@example.com')
+    const invitePage = await (await call('/invite', as(ann))).text()
+    const code = invitePage.match(/\/i\/([\w-]+)/)![1]!
+    expect(invitePage).toContain('Your invite link')
+    // The invitee follows the link: a landing page, and the code kept in a cookie.
+    const landing = await call(`/i/${code}`)
+    expect(await landing.text()).toContain('invited you')
+    const ref = landing.headers.get('set-cookie')!.split(';')[0]!
+    expect(ref).toBe(`bi_ref=${code}`)
+    expect(await (await call('/login', { headers: { cookie: ref } })).text()).toContain('invited you')
+    expect((await call('/i/nope')).headers.get('location')).toBe('/invite')
+    const bob = await signIn(call, mail, 'bob@example.com', ref)
+    const annId = store.userByEmail('ann@example.com')!.id
+    expect(store.inviteStats(annId)).toMatchObject({ invited: 1, launched: 0, credits: 0 })
+    // Joining is not enough: the credit comes when Bob's listing goes live.
+    await call('/submit', as(bob, form({ url: 'acme.test' })))
+    expect(store.inviteStats(annId).credits).toBe(0)
+    await call('/p/acme/edit', as(bob, form({ action: 'publish', name: 'Acme' })))
+    expect(store.inviteStats(annId)).toMatchObject({ invited: 1, launched: 1, credits: 1 })
+    expect(mail.at(-1)).toMatchObject({ to: 'ann@example.com', subject: 'You earned a free Featured week on built.indie' })
+    // Once per member: Bob's next launch earns nothing more.
+    expect(store.earnInvite(store.userByEmail('bob@example.com')!.id, 'x')).toBeNull()
+    // An existing member, or yourself, never counts.
+    expect(store.recordInvite(annId, code)).toBe(false)
+    await signIn(call, mail, 'bob@example.com', ref)
+    expect(store.inviteStats(annId).invited).toBe(1)
+    // The leaderboard (@profullstack/leaderboard) ranks Ann, by the name she picks, never her email.
+    expect(await (await call('/invite/name', as(ann, form({ displayName: '  Ann   the Maker ' })))).text()).toContain('Ann the Maker')
+    const top = await (await call('/leaderboard/invites.json?period=week')).json()
+    expect(top.rows[0]).toMatchObject({ rank: 1, name: 'Ann the Maker', value: 1 })
+    expect(top.rows[0].badges.map((b: { id: string }) => b.id)).toContain('first-invite')
+    expect((await call('/leaderboard.json')).status).toBe(200)
+    expect(await (await call('/leaderboard/invites.xml')).text()).toContain('<rss')
+    expect(await (await call('/leaderboard')).text()).toContain('/leaderboard/embed.js')
+    expect((await call('/leaderboard/embed.js')).headers.get('content-type')).toContain('javascript')
+    const home = await (await call('/')).text()
+    expect(home).toContain('Invite a maker, get Featured free')
+    expect(home).toContain('Ann the Maker')
+    expect(JSON.stringify(top)).not.toContain('ann@example.com')
+    // Ann spends the credit on her own listing.
+    await call('/submit', as(ann, form({ url: 'beta.test' })))
+    const b = store.byUrl('https://beta.test/')!.slug
+    await call(`/p/${b}/edit`, as(ann, form({ action: 'publish', name: 'Beta' })))
+    expect(await (await call(`/p/${b}`, as(ann))).text()).toContain('Use a free invite credit')
+    expect((await call('/p/acme/credit', as(ann, form({})))).headers.get('location')).toBe('/p/acme')
+    expect((await call(`/p/${b}/credit`, as(ann, form({})))).headers.get('location')).toBe(`/p/${b}?featured=credit`)
+    expect(store.bySlug(b)!.featuredUntil!).toBeGreaterThan(Date.now() + 6 * 86400_000)
+    expect(store.inviteStats(annId)).toMatchObject({ credits: 0, used: 1 })
+    expect((await call(`/p/${b}/credit`, as(ann, form({})))).status).toBe(400)
+    expect(await (await call('/')).text()).toContain('Featured')
+    // The same from the API and the CLI.
+    const key = store.newApiKey(annId)
+    const client = new BuiltIndieClient('http://localhost', key, ((u: string, i: RequestInit) => call(new URL(u).pathname + new URL(u).search, i)) as unknown as typeof fetch)
+    const lines: string[] = []
+    expect(await main(['invite'], { log: (t) => lines.push(t), error: (t) => lines.push(t) }, client)).toBe(0)
+    expect(lines.at(-1)).toContain(`https://built.indie.pit.world/i/${code}`)
+    expect((await call(`/api/v1/products/${store.byUrl('https://beta.test/')!.slug}/credit`, json({}, { authorization: `Bearer ${key}` }))).status).toBe(400)
+  })
+
+  test('a listing taken down for spam takes back the credit it earned, if unspent', async () => {
+    const { call, mail, store } = setup()
+    const ann = await signIn(call, mail, 'ann@example.com')
+    const code = (await (await call('/invite', { headers: { cookie: ann } })).text()).match(/\/i\/([\w-]+)/)![1]!
+    const bob = await signIn(call, mail, 'bob@example.com', `bi_ref=${code}`)
+    await call('/submit', { ...form({ url: 'acme.test' }), headers: { ...form({}).headers, cookie: bob } })
+    await call('/p/acme/edit', { ...form({ action: 'publish', name: 'Acme' }), headers: { ...form({}).headers, cookie: bob } })
+    const annId = store.userByEmail('ann@example.com')!.id
+    expect(store.inviteStats(annId).credits).toBe(1)
+    await call('/api/v1/products/acme', { method: 'DELETE', headers: { authorization: 'Bearer admin-key-0123456789' } })
+    expect(store.inviteStats(annId)).toMatchObject({ launched: 0, credits: 0 })
   })
 })

@@ -53,7 +53,10 @@ export type Product = {
   updatedAt: number
 }
 
-export type User = { id: string; email: string; createdAt: number }
+export type User = { id: string; email: string; createdAt: number; displayName: string | null }
+
+/** Where a member stands in the invite program. A credit is one Featured week, free. */
+export type InviteStats = { code: string; invited: number; launched: number; credits: number; used: number }
 
 export type Maker = { id: string; name: string; profileUrl: string; headline: string; avatar: string | null; web: string | null; accounts: string[]; createdAt: number }
 
@@ -64,7 +67,7 @@ export const newId = (bytes = 9) => randomBytes(bytes).toString('base64url')
 export const makerIdFor = (profileUrl: string) => createHash('sha256').update(profileUrl.toLowerCase()).digest('base64url').slice(0, 10)
 
 /** Paths that are pages, never product slugs. */
-const RESERVED = new Set(['submit', 'new', 'top', 'api', 'm', 'p', 'b', 'makers', 'help', 'about', 'feed', 'badge', 'hooks', 'health', 'ring', 'well-known', 'admin', 'today', 'week', 'month', 'all', 'featured', 'edit'])
+const RESERVED = new Set(['submit', 'new', 'top', 'api', 'm', 'p', 'b', 'makers', 'help', 'about', 'feed', 'badge', 'hooks', 'health', 'ring', 'well-known', 'admin', 'today', 'week', 'month', 'all', 'featured', 'edit', 'i', 'invite', 'leaderboard'])
 
 export function slugify(name: string): string {
   const s = name
@@ -159,6 +162,19 @@ export class Store {
         created_at INTEGER NOT NULL,
         UNIQUE (product_id, user_id)
       );
+      CREATE TABLE IF NOT EXISTS invite_codes (code TEXT PRIMARY KEY, user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE, created_at INTEGER NOT NULL);
+      -- One row per member who joined through someone's invite link. It doubles as the
+      -- credit ledger: earned when their first listing goes live, redeemed for a Featured week.
+      CREATE TABLE IF NOT EXISTS invites (
+        invitee_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        inviter_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at INTEGER NOT NULL,
+        product_id TEXT,
+        earned_at INTEGER,
+        redeemed_product TEXT,
+        redeemed_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS invites_inviter ON invites(inviter_id, earned_at);
       CREATE TABLE IF NOT EXISTS payments (
         ref TEXT PRIMARY KEY,
         product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
@@ -170,6 +186,10 @@ export class Store {
         updated_at INTEGER NOT NULL
       );
     `)
+    // Columns added after launch: CREATE TABLE IF NOT EXISTS leaves an existing table as it was.
+    const has = (table: string, col: string) => (this.db.query(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((c) => c.name === col)
+    if (!has('users', 'display_name')) this.db.exec('ALTER TABLE users ADD COLUMN display_name TEXT')
+    if (!has('magic_links', 'ref')) this.db.exec('ALTER TABLE magic_links ADD COLUMN ref TEXT')
   }
 
   /** One visitor, per product, without keeping their address. */
@@ -286,7 +306,78 @@ export class Store {
   }
 
   private toUser(r: any): User | null {
-    return r ? { id: r.id, email: r.email, createdAt: r.created_at } : null
+    return r ? { id: r.id, email: r.email, createdAt: r.created_at, displayName: r.display_name ?? null } : null
+  }
+
+  userByEmail(email: string): User | null {
+    return this.toUser(this.db.query('SELECT * FROM users WHERE email = ?').get(email.toLowerCase()))
+  }
+
+  setDisplayName(userId: string, name: string | null): void {
+    this.db.query('UPDATE users SET display_name = ? WHERE id = ?').run(name, userId)
+  }
+
+  /** What the public sees for a member: the name they chose, else their best listing, never the email. */
+  publicName(userId: string): string {
+    const u = this.user(userId)
+    if (u?.displayName) return u.displayName
+    const p = this.db.query("SELECT name FROM products WHERE (owner_id = ? OR (owner_id IS NULL AND submitter_user = ?)) AND status = 'live' ORDER BY votes DESC LIMIT 1").get(userId, userId) as { name: string } | null
+    return p ? `Maker of ${p.name}` : `Member ${userId.slice(0, 4)}`
+  }
+
+  // The invite program: a link per member; each new member it brings in who launches earns the inviter a free Featured week.
+
+  /** This member's invite code, made once. */
+  inviteCode(userId: string, now = Date.now()): string {
+    this.db.query('INSERT OR IGNORE INTO invite_codes (code, user_id, created_at) VALUES (?, ?, ?)').run(newId(6), userId, now)
+    return (this.db.query('SELECT code FROM invite_codes WHERE user_id = ?').get(userId) as { code: string }).code
+  }
+
+  inviterOf(code: string): string | null {
+    const r = this.db.query('SELECT user_id FROM invite_codes WHERE code = ?').get(String(code)) as { user_id: string } | null
+    return r?.user_id ?? null
+  }
+
+  /** A new member joined through `code`. Once per member, never yourself. True when it counted. */
+  recordInvite(inviteeId: string, code: string, now = Date.now()): boolean {
+    const inviter = this.inviterOf(code)
+    if (!inviter || inviter === inviteeId) return false
+    return this.db.query('INSERT OR IGNORE INTO invites (invitee_id, inviter_id, created_at) VALUES (?, ?, ?)').run(inviteeId, inviter, now).changes > 0
+  }
+
+  /** The invited member's listing went live: their inviter earns a credit, the first time only. Returns the inviter. */
+  earnInvite(inviteeId: string, productId: string, now = Date.now()): string | null {
+    const r = this.db.query('UPDATE invites SET product_id = ?, earned_at = ? WHERE invitee_id = ? AND earned_at IS NULL RETURNING inviter_id').get(productId, now, inviteeId) as { inviter_id: string } | null
+    return r?.inviter_id ?? null
+  }
+
+  /** A listing taken down for spam takes back the credit it earned, unless it was already spent. */
+  revokeInvite(productId: string): void {
+    this.db.query('UPDATE invites SET product_id = NULL, earned_at = NULL WHERE product_id = ? AND redeemed_at IS NULL').run(productId)
+  }
+
+  inviteStats(userId: string): InviteStats {
+    const r = this.db
+      .query('SELECT COUNT(*) AS invited, COUNT(earned_at) AS launched, COUNT(redeemed_at) AS used FROM invites WHERE inviter_id = ?')
+      .get(userId) as { invited: number; launched: number; used: number }
+    return { code: this.inviteCode(userId), invited: r.invited, launched: r.launched, used: r.used, credits: r.launched - r.used }
+  }
+
+  /** Spend one earned credit: the product is featured for `days` more. False when there is no credit left. */
+  redeemCredit(userId: string, productId: string, days: number, now = Date.now()): boolean {
+    return this.db.transaction(() => {
+      const r = this.db
+        .query('UPDATE invites SET redeemed_product = ?, redeemed_at = ? WHERE invitee_id = (SELECT invitee_id FROM invites WHERE inviter_id = ? AND earned_at IS NOT NULL AND redeemed_at IS NULL ORDER BY earned_at LIMIT 1)')
+        .run(productId, now, userId)
+      if (!r.changes) return false
+      this.db.query('UPDATE products SET featured_until = MAX(COALESCE(featured_until, 0), ?) + ? WHERE id = ?').run(now, days * 86400_000, productId)
+      return true
+    })()
+  }
+
+  /** Every credit earned since `since`, for the inviters' leaderboard. */
+  earnedInvites(since = 0): { inviter: string; at: number }[] {
+    return (this.db.query('SELECT inviter_id, earned_at FROM invites WHERE earned_at IS NOT NULL AND earned_at >= ?').all(since) as { inviter_id: string; earned_at: number }[]).map((r) => ({ inviter: r.inviter_id, at: r.earned_at }))
   }
 
   newApiKey(userId: string, now = Date.now()): string {

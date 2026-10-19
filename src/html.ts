@@ -5,7 +5,7 @@
  */
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import type { Maker, Product, User, Window } from './db.js'
+import type { InviteStats, Maker, Product, User, Window } from './db.js'
 import { RING_PLACEHOLDER } from './ring.js'
 import { CHAIN_LABELS } from './service.js'
 import { icon, SOCIAL_ICONS } from './icons.js'
@@ -81,6 +81,8 @@ ${RING_PLACEHOLDER}
     <a href="/top/today">Today</a>
     <a href="/top/week">Week</a>
     <a href="/new">New</a>
+    <a href="/invite">Invite</a>
+    <a href="/leaderboard">Leaderboard</a>
     <a href="/help">API</a>
     ${o.ctx.user ? '<a href="/me">Mine</a>' : '<a href="/login">Sign in</a>'}
     <a class="btn small-btn" href="/submit">${icon('rocket')} Launch</a>
@@ -92,7 +94,7 @@ ${o.body}
 ${o.ads ? adUnit('text_link') : ''}
 <footer>
   <span>built.indie: launch your indie product with one URL. Free, open source.</span>
-  <span><a href="/help">API · CLI · MCP</a> · <a href="/feed.xml">RSS</a> · <a href="${REPO}">Source</a> · <a href="https://pit.world/ring">Moshpit ring</a></span>
+  <span><a href="/invite">Invite a maker</a> · <a href="/leaderboard">Top inviters</a> · <a href="/help">API · CLI · MCP</a> · <a href="/feed.xml">RSS</a> · <a href="${REPO}">Source</a> · <a href="https://pit.world/ring">Moshpit ring</a></span>
 </footer>
 </body>
 </html>`
@@ -145,7 +147,30 @@ function submitForm(compact = false, values: Record<string, string> = {}, error?
 </form>`
 }
 
-export function homePage(ctx: Ctx, d: { today: Product[]; featured: Product[]; yesterday: Product[]; stats: { products: number; votes: number } }): string {
+/** One inviter on a board: rank, public name, how many of their invitees launched, badges. */
+export type InviterRow = { rank: number | null; id: string; name: string; value: number; badges: { emoji: string; label: string }[]; url: string }
+
+function invitersList(rows: InviterRow[]): string {
+  return `<ol class="board inviters">${rows
+    .map((r) => `<li class="row-item"><span class="rank">${r.rank ?? ''}</span><a class="row-main" href="${esc(r.url)}"><span class="row-text"><b>${esc(r.name)}</b><span class="muted">${r.value} maker${r.value === 1 ? '' : 's'} launched ${r.badges.map((b) => `<span title="${esc(b.label)}">${esc(b.emoji)}</span>`).join('')}</span></span></a></li>`)
+    .join('')}</ol>`
+}
+
+/** The invite offer, in one sentence, wherever it is promoted. */
+export const inviteOffer = (days: number, usd: number) => `Every maker you invite who launches a listing earns you a free Featured week: ${days} days pinned above today’s board (a $${usd} spot). No cap.`
+
+function invitePromo(ctx: Ctx, d: { inviters: InviterRow[]; featureDays: number; featureUsd: number }): string {
+  return `<section class="card invite-promo" id="invite">
+  <div>
+    <h2>${icon('star')} Invite a maker, get Featured free</h2>
+    <p class="muted">${esc(inviteOffer(d.featureDays, d.featureUsd))}</p>
+    <p class="row"><a class="btn small-btn" href="${ctx.user ? '/invite' : '/login?next=/invite'}">Get your invite link</a><a class="chip" href="/leaderboard">${icon('trophy')} Top inviters</a></p>
+  </div>
+  <div><h3 class="mini-h">Top inviters this week</h3>${d.inviters.length ? invitersList(d.inviters) : '<p class="muted small">Nobody yet. Invite one maker who launches and you top the board.</p>'}</div>
+</section>`
+}
+
+export function homePage(ctx: Ctx, d: { today: Product[]; featured: Product[]; yesterday: Product[]; stats: { products: number; votes: number }; inviters: InviterRow[]; featureDays: number; featureUsd: number }): string {
   return layout({
     ctx,
     title: 'built.indie: launch your indie product with one URL',
@@ -158,6 +183,7 @@ export function homePage(ctx: Ctx, d: { today: Product[]; featured: Product[]; y
   ${submitForm(true)}
   <p class="muted small">${d.stats.products} launched · ${d.stats.votes} upvotes · free, no sign-up to launch</p>
 </section>
+${invitePromo(ctx, d)}
 ${d.featured.length ? `<h2 class="section-h">Featured</h2>${board(ctx, d.featured, false)}` : ''}
 <h2 class="section-h">Launching today <span class="muted small">resets at 00:00 UTC</span></h2>
 ${board(ctx, d.today) || `<p class="empty">Nothing launched yet today. <a href="/submit">Be first</a>: first launch of the day gets the top spot until someone beats it.</p>`}
@@ -228,7 +254,7 @@ function pricingHtml(p: Product): string {
 
 const SOCIAL_LABELS: Record<string, string> = { x: 'X', github: 'GitHub', linkedin: 'LinkedIn', discord: 'Discord', youtube: 'YouTube', bluesky: 'Bluesky', instagram: 'Instagram', tiktok: 'TikTok', reddit: 'Reddit', telegram: 'Telegram', producthunt: 'Product Hunt', appstore: 'App Store', playstore: 'Google Play', chrome: 'Chrome Web Store' }
 
-export function productPage(ctx: Ctx, d: { product: Product; award: { day: string; rank: number } | null; maker: Maker | null; featuredOk?: boolean; launched?: boolean; canEdit?: boolean; chains: string[]; featureUsd: number; featureDays: number; payments: boolean }): string {
+export function productPage(ctx: Ctx, d: { product: Product; award: { day: string; rank: number } | null; maker: Maker | null; featuredOk?: boolean; featuredCredit?: boolean; launched?: boolean; canEdit?: boolean; credits?: number; chains: string[]; featureUsd: number; featureDays: number; payments: boolean }): string {
   const p = d.product
   const shots = [p.screenshot, ...p.images, p.ogImage].filter((f): f is string => Boolean(f))
   const rel = p.verifiedAt ? 'noopener' : 'noopener nofollow ugc'
@@ -245,6 +271,7 @@ export function productPage(ctx: Ctx, d: { product: Product; award: { day: strin
     head: `<link rel="opensite" href="/p/${esc(p.slug)}/opensite.json"><link rel="alternate" type="text/markdown" title="OpenProfile" href="/p/${esc(p.slug)}/openprofile.md">`,
     body: `${d.launched && live ? `<div class="note launched"><b>🚀 ${esc(p.name)} is live.</b> Today’s board resets at midnight UTC: share it now. ${p.ownerId ? '' : `Is it yours? <a href="/p/${esc(p.slug)}/claim">Claim it</a> with your badge (or a DNS record) to edit it and get the ✓.`}</div>` : ''}
 ${d.featuredOk ? '<p class="note">Thanks! Your payment is on its way; the Featured spot starts the moment CoinPay confirms it.</p>' : ''}
+${d.featuredCredit ? `<p class="note launched">★ Featured for ${d.featureDays} more days with an invite credit. <a href="/invite">Invite another maker</a> to earn the next one.</p>` : ''}
 ${!live ? `<p class="note">${p.status === 'draft' ? 'Draft: only people with the edit link see this.' : 'Taken down.'}</p>` : ''}
 <section class="product-head">
   ${logoImg(p, 72)}
@@ -278,9 +305,10 @@ ${live ? `<h2 class="section-h">Share it</h2>${share(ctx.origin, p)}
   <pre><code>${esc(badgeSnippet(ctx.origin, p))}</code></pre>
   <div class="row"><button class="chip" data-copy="${esc(badgeSnippet(ctx.origin, p))}">Copy badge HTML</button><form method="post" action="/p/${esc(p.slug)}/verify"><button class="chip">I added it: check</button></form></div>
 </details>
-${d.payments ? `<details class="card" id="feature"><summary>Feature it: ${esc(`$${d.featureUsd}`)} for ${d.featureDays} days</summary>
-  <p class="muted">Pinned above today’s board on the homepage for ${d.featureDays} days. Paid in crypto through CoinPay.</p>
-  <form method="post" action="/p/${esc(p.slug)}/feature" class="row"><label class="sr" for="chain">Pay with</label><select id="chain" name="chain">${d.chains.map((c) => `<option value="${esc(c)}">${esc(CHAIN_LABELS[c] ?? c)}</option>`).join('')}</select><button class="btn">Pay $${esc(d.featureUsd)}</button></form>
+${d.payments || d.canEdit ? `<details class="card" id="feature"${d.canEdit && d.credits ? ' open' : ''}><summary>Feature it: ${esc(`$${d.featureUsd}`)} for ${d.featureDays} days, or free with an invite</summary>
+  <p class="muted">Pinned above today’s board on the homepage for ${d.featureDays} days.</p>
+  ${d.canEdit && d.credits ? `<form method="post" action="/p/${esc(p.slug)}/credit" class="row"><button class="btn">${icon('star')} Use a free invite credit</button><span class="muted small">${d.credits} left</span></form>` : `<p class="muted small">Free: ${esc(inviteOffer(d.featureDays, d.featureUsd))} <a href="/invite">Get your invite link</a>.</p>`}
+  ${d.payments ? `<form method="post" action="/p/${esc(p.slug)}/feature" class="row"><label class="sr" for="chain">Pay with</label><select id="chain" name="chain">${d.chains.map((c) => `<option value="${esc(c)}">${esc(CHAIN_LABELS[c] ?? c)}</option>`).join('')}</select><button class="btn${d.canEdit && d.credits ? ' ghost' : ''}">Pay $${esc(d.featureUsd)} in crypto</button></form>` : ''}
 </details>` : ''}
 ${adUnit('banner_300x250')}` : ''}`,
   })
@@ -443,7 +471,7 @@ ${d.result && !d.result.ok ? `<p class="note error" role="alert">We did not find
   })
 }
 
-export function loginPage(ctx: Ctx, d: { next: string | null; sent?: boolean; error?: string; email?: string }): string {
+export function loginPage(ctx: Ctx, d: { next: string | null; sent?: boolean; error?: string; email?: string; invitedBy?: string | null }): string {
   return layout({
     ctx,
     title: 'Sign in · built.indie',
@@ -452,6 +480,7 @@ export function loginPage(ctx: Ctx, d: { next: string | null; sent?: boolean; er
     noindex: true,
     body: `<section class="hero narrow"><h1>${d.sent ? 'Check your email' : 'Sign in'}</h1>
 ${d.sent ? '<p class="lede">If that address can receive mail, a sign-in link is on its way. It works once, for 20 minutes.</p>' : `<p class="lede">No password. We email you a link; a new address makes an account. You need one only to claim and edit a listing. Launching is free and needs nothing.</p>
+${d.invitedBy ? `<p class="note launched">${esc(d.invitedBy)} invited you. Sign up here, then launch your product: it is free, and it earns them a Featured week.</p>` : ''}
 ${d.error ? `<p class="note error" role="alert">${esc(d.error)}</p>` : ''}
 <form method="post" action="/login" class="card">
   <input type="hidden" name="next" value="${esc(d.next ?? '')}">
@@ -461,7 +490,7 @@ ${d.error ? `<p class="note error" role="alert">${esc(d.error)}</p>` : ''}
   })
 }
 
-export function mePage(ctx: Ctx, d: { user: User; products: Product[]; apiKey?: string }): string {
+export function mePage(ctx: Ctx, d: { user: User; products: Product[]; apiKey?: string; invite: InviteStats }): string {
   return layout({
     ctx,
     title: 'Your launches · built.indie',
@@ -471,6 +500,7 @@ export function mePage(ctx: Ctx, d: { user: User; products: Product[]; apiKey?: 
     body: `<h1 class="page-h">Your launches</h1>
 <p class="muted">Signed in as ${esc(d.user.email)}. <form class="inline" method="post" action="/logout"><button class="linkish">Sign out</button></form></p>
 ${d.products.length ? `<ol class="board">${d.products.map((p) => `<li class="row-item"><a class="row-main" href="/p/${esc(p.slug)}">${logoImg(p)}<span class="row-text"><b>${esc(p.name)}</b><span class="muted">${p.status === 'draft' ? 'draft' : `▲ ${p.votes}`} · ${p.ownerId === d.user.id ? 'claimed ✓' : 'submitted by you, not claimed'}</span></span></a><a class="chip" href="/p/${esc(p.slug)}/edit">Edit</a>${p.ownerId === d.user.id ? '' : `<a class="chip" href="/p/${esc(p.slug)}/claim">Claim</a>`}</li>`).join('')}</ol>` : '<p class="empty">Nothing yet. <a href="/submit">Launch something</a>, or open a listing that is yours and claim it.</p>'}
+<div class="card"><h2>${icon('star')} Invites</h2><p class="muted">${d.invite.invited} joined through your link · ${d.invite.launched} launched · <b>${d.invite.credits}</b> free Featured week${d.invite.credits === 1 ? '' : 's'} to use.</p><p><a class="chip" href="/invite">Your invite link and credits</a></p></div>
 <div class="card" id="api"><h2>API key</h2>
 ${d.apiKey ? `<p class="note"><b>Copy it now</b>, we show it once. Making a new one retires this one.</p><div class="address"><code>${esc(d.apiKey)}</code><button class="copy" data-copy="${esc(d.apiKey)}">Copy</button></div><pre>export BUILTINDIE_KEY=${esc(d.apiKey)}</pre>` : '<p class="muted">For the CLI, the TUI and the MCP server: edit and claim from the terminal or an agent.</p>'}
 <form method="post" action="/me/key"><button class="chip">${d.apiKey ? 'Make another' : 'Make an API key'}</button></form></div>`,
@@ -516,7 +546,10 @@ curl -X POST ${o}/api/v1/products/&lt;slug&gt;/claim -H 'authorization: Bearer b
 curl -X PATCH ${o}/api/v1/products/&lt;slug&gt; -H 'authorization: Bearer bi_…' \\
   -H 'content-type: application/json' -d '{"tagline":"…","videos":["https://youtu.be/…"]}'
 curl -X POST ${o}/api/v1/products/&lt;slug&gt;/refetch -H 'authorization: Bearer bi_…'
-curl -X POST ${o}/api/v1/products/&lt;slug&gt;/publish -H 'authorization: Bearer bi_…'</pre>
+curl -X POST ${o}/api/v1/products/&lt;slug&gt;/publish -H 'authorization: Bearer bi_…'
+curl ${o}/api/v1/invites -H 'authorization: Bearer bi_…'                 # your invite link and credits
+curl -X POST ${o}/api/v1/products/&lt;slug&gt;/credit -H 'authorization: Bearer bi_…'   # spend one: Featured for a week
+curl ${o}/leaderboard/invites.json?period=week                       # top inviters (all|week|month)</pre>
 <p class="muted small">Claiming, the easy way: the badge. <code>GET …/claim</code> answers a <code>badge</code> snippet next to the DNS <code>record</code>; put it on your homepage (<code>&lt;img src="${o}/images.svg?id=&lt;id&gt;"&gt;</code>, the id is yours for that listing) and the <code>POST</code> answers <code>{"claimed": true, "method": "badge"}</code>. It also earns the followed link and the ✓ in the same step.</p>
 <p class="muted small">OpenSite (logicsrc.com/docs/opensite): <code>GET /api/v1/sites?url=…</code>, <code>POST /api/v1/sites</code>, and every product at <code>/p/&lt;slug&gt;/opensite.json</code>. OpenProfile: <code>/p/&lt;slug&gt;/openprofile.md</code>, <code>/makers/&lt;id&gt;/openprofile.md</code>.</p></div>
 <div class="card" id="cli"><h2>CLI and TUI</h2>
@@ -528,14 +561,103 @@ bunx @profullstack/builtindie top week
 bunx @profullstack/builtindie show &lt;slug&gt;
 bunx @profullstack/builtindie vote &lt;slug&gt;
 BUILTINDIE_KEY=bi_… bunx @profullstack/builtindie claim &lt;slug&gt;   # your badge (or a TXT record), then checks it
+BUILTINDIE_KEY=bi_… bunx @profullstack/builtindie invite          # your invite link and free Featured credits
 bunx @profullstack/builtindie preview any.site --json</pre></div>
 <div class="card" id="mcp"><h2>MCP</h2>
 <pre>claude mcp add builtindie -- bunx @profullstack/builtindie mcp</pre>
-<p class="muted">Tools: <code>launch_product</code>, <code>preview_site</code>, <code>list_products</code>, <code>get_product</code>, <code>upvote</code>, <code>search</code>, and with <code>BUILTINDIE_KEY</code>: <code>claim_product</code>, <code>edit_product</code>, <code>my_products</code>.</p></div>
+<p class="muted">Tools: <code>launch_product</code>, <code>preview_site</code>, <code>list_products</code>, <code>get_product</code>, <code>upvote</code>, <code>search</code>, and with <code>BUILTINDIE_KEY</code>: <code>claim_product</code>, <code>edit_product</code>, <code>my_products</code>, <code>my_invites</code>, <code>feature_with_credit</code>.</p></div>
 <div class="card" id="bot"><h2>Our reader</h2>
 <p class="muted">We fetch only what a person submits, once, plus a re-read when the maker asks. User agent <code>built.indie/1.0</code>. We honour <code>robots.txt</code> and <code>index.allow: false</code> in <code>/.well-known/opensite.json</code>. Screenshots are taken with headless Chrome.</p></div>
 <div class="card"><h2>Make your page read well</h2>
 <ul class="muted"><li><code>og:image</code> 1200×630 and an <code>apple-touch-icon</code> or a manifest icon 512×512</li><li><code>/llms.txt</code>: <code># Name</code>, then <code>&gt; one-line summary</code></li><li><code>/.well-known/opensite.json</code> (<a href="https://logicsrc.com/opensite">OpenSite</a>) to say it yourself</li><li><code>/.well-known/openprofile.md</code> (<a href="https://logicsrc.com/openprofile">OpenProfile</a>) with <code>Kind: organization</code> and your accounts</li><li><code>/.well-known/openstack.md</code> (<a href="https://logicsrc.com/docs/openstack">OpenStack.md</a>): we show it as “Built with”</li><li><code>/.well-known/opensaas.json</code> (<a href="https://logicsrc.com/opensaas">OpenSaaS</a>): your plans and your cancel page</li><li><code>/.well-known/openicon.json</code> (<a href="https://logicsrc.com/docs/openicon">OpenIcon</a>) if you publish an icon set</li><li>a YouTube/Vimeo/Loom embed or <code>og:video</code> for your demo</li></ul></div>`,
+  })
+}
+
+/** Your invite link, what it has earned, and the listings a credit can feature. */
+export function invitePage(ctx: Ctx, d: { featureDays: number; featureUsd: number; inviters: InviterRow[]; me?: { link: string; stats: InviteStats; name: string; displayName: string | null; listings: Product[]; flash?: string; error?: string } }): string {
+  const m = d.me
+  const text = 'I launch my indie products on built.indie: one URL and it pulls in the logo, screenshots and story. Launch yours free:'
+  const shares: [string, string, string][] = m
+    ? [
+        ['X', 'x', `https://x.com/intent/post?text=${enc(text)}&url=${enc(m.link)}`],
+        ['Bluesky', 'bluesky', `https://bsky.app/intent/compose?text=${enc(`${text} ${m.link}`)}`],
+        ['LinkedIn', 'linkedin', `https://www.linkedin.com/sharing/share-offsite/?url=${enc(m.link)}`],
+        ['Email', 'mail', `mailto:?subject=${enc('Launch your product on built.indie')}&body=${enc(`${text}\n\n${m.link}`)}`],
+      ]
+    : []
+  const featuring = (p: Product) => (p.featuredUntil && p.featuredUntil > Date.now() ? `Featured until ${new Date(p.featuredUntil).toISOString().slice(0, 10)}` : p.domain)
+  return layout({
+    ctx,
+    title: 'Invite makers, get Featured free · built.indie',
+    description: inviteOffer(d.featureDays, d.featureUsd),
+    path: '/invite',
+    ads: !m,
+    body: `<section class="hero"><h1>Invite a maker.<br>Get Featured free.</h1>
+<p class="lede">${esc(inviteOffer(d.featureDays, d.featureUsd))}</p></section>
+${m?.flash ? `<p class="note launched">${esc(m.flash)}</p>` : ''}${m?.error ? `<p class="note error" role="alert">${esc(m.error)}</p>` : ''}
+${
+  m
+    ? `<div class="card"><h2>Your invite link</h2>
+<div class="address"><code>${esc(m.link)}</code><button class="copy" data-copy="${esc(m.link)}">Copy</button></div>
+<div class="share">${shares.map(([n, i, h]) => `<a class="chip" href="${esc(h)}" target="_blank" rel="noopener">${icon(i)} ${esc(n)}</a>`).join('')}</div>
+<div class="grid3 stats"><div><b>${m.stats.invited}</b><span class="muted small">joined</span></div><div><b>${m.stats.launched}</b><span class="muted small">launched</span></div><div><b>${m.stats.credits}</b><span class="muted small">free weeks to use</span></div></div>
+</div>
+${
+  m.stats.credits
+    ? `<div class="card"><h2>${icon('star')} Use a credit</h2>${
+        m.listings.length
+          ? `<ol class="board">${m.listings.map((p) => `<li class="row-item"><a class="row-main" href="/p/${esc(p.slug)}">${logoImg(p, 36)}<span class="row-text"><b>${esc(p.name)}</b><span class="muted">${esc(featuring(p))}</span></span></a><form method="post" action="/p/${esc(p.slug)}/credit"><button class="chip">Feature ${d.featureDays} days</button></form></li>`).join('')}</ol>`
+          : '<p class="muted">You have no live listing yet. <a href="/submit">Launch one</a>, then come back to feature it.</p>'
+      }</div>`
+    : ''
+}
+<div class="card"><h2>Your name on the board</h2><p class="muted small">Shown as <b>${esc(m.name)}</b>. We never show your email.</p>
+<form method="post" action="/invite/name" class="row"><label class="sr" for="displayName">Display name</label><input id="displayName" name="displayName" maxlength="40" placeholder="Your name or handle" value="${esc(m.displayName ?? '')}"><button class="chip">Save</button></form></div>`
+    : '<p class="center"><a class="btn" href="/login?next=/invite">Sign in to get your invite link</a></p>'
+}
+<div class="grid3">
+  <div class="card"><h2><span class="step-n">1</span>Share</h2><p class="muted">Send your link to a maker who has shipped something.</p></div>
+  <div class="card"><h2><span class="step-n">2</span>They launch</h2><p class="muted">They sign up through it and publish a listing. One URL; we fetch the rest.</p></div>
+  <div class="card"><h2><span class="step-n">3</span>You are Featured</h2><p class="muted">You get a credit: ${d.featureDays} days pinned on the homepage, on any listing you own.</p></div>
+</div>
+<h2 class="section-h">Top inviters this week <a class="small" href="/leaderboard">full board</a></h2>
+${d.inviters.length ? invitersList(d.inviters) : '<p class="empty">Nobody yet. One invite that launches puts you at #1.</p>'}
+<p class="muted small">It counts once per new member, the first time a listing they submitted goes live. Inviting yourself does not count.</p>`,
+  })
+}
+
+/** Where an invite link lands: who invited you, and one step to launch. */
+export function inviteLanding(ctx: Ctx, d: { inviter: string }): string {
+  return layout({
+    ctx,
+    title: `${d.inviter} invited you to launch on built.indie`,
+    description: 'Launch your indie product with one URL. We fetch the logo, screenshots and story; people upvote; you get a badge. Free.',
+    path: '/invite',
+    noindex: true,
+    body: `<section class="hero"><h1>${esc(d.inviter)} invited you.</h1>
+<p class="lede">Launch your indie product with one URL. We pull your logo, screenshots, videos and story from your homepage. People upvote. You get a badge. Free.</p>
+${
+  ctx.user
+    ? `<p><a class="btn" href="/submit">${icon('rocket')} Launch your product</a></p>`
+    : `<p><a class="btn" href="/login?next=/submit">${icon('rocket')} Sign up and launch</a></p><p class="muted small">Sign up with your email first, then launch: that is what earns ${esc(d.inviter)} a free Featured week, and you get your own invite link too.</p>`
+}
+</section>`,
+  })
+}
+
+/** The inviters' board in the site's layout; the widget is @profullstack/leaderboard's. */
+export function leaderboardPage(ctx: Ctx, d: { featureDays: number; featureUsd: number; me?: string | null }): string {
+  return layout({
+    ctx,
+    title: 'Top inviters · built.indie',
+    description: `The members who brought the most makers to built.indie. ${inviteOffer(d.featureDays, d.featureUsd)}`,
+    path: '/leaderboard',
+    ads: true,
+    head: '<link rel="alternate" type="application/rss+xml" title="Top inviters" href="/leaderboard/invites.xml?period=week">',
+    body: `<h1 class="page-h">${icon('trophy')} Top inviters</h1>
+<p class="muted">${esc(inviteOffer(d.featureDays, d.featureUsd))} <a href="/invite">Get your link</a>.</p>
+<div class="card"><div data-leaderboard></div><script src="/leaderboard/embed.js" data-board="invites" data-period="week" data-limit="25"${d.me ? ` data-me="${esc(d.me)}"` : ''}></script></div>
+<p class="muted small">Put this board on your site: <code>&lt;div data-leaderboard&gt;&lt;/div&gt;&lt;script src="${esc(ctx.origin)}/leaderboard/embed.js" data-board="invites"&gt;&lt;/script&gt;</code> · <a href="/leaderboard.json">JSON</a> · <a href="/leaderboard/invites.xml?period=week">RSS</a></p>`,
   })
 }
 
