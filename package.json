@@ -1,6 +1,6 @@
 {
   "name": "@profullstack/builtindie",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "built.indie: launch your indie product with one URL. We fetch the logo, screenshots, videos, llms.txt, OpenSite and OpenProfile from your homepage; people upvote; you get a badge. Web (PWA), API, CLI, TUI and MCP.",
   "license": "MIT",
   "type": "module",
