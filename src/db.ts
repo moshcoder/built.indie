@@ -457,6 +457,15 @@ export class Store {
     return (this.db.query("SELECT * FROM products WHERE status = 'live' AND (name LIKE ? ESCAPE '\\' OR tagline LIKE ? ESCAPE '\\' OR domain LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\') ORDER BY votes DESC LIMIT ?").all(like, like, like, like, limit) as any[]).map((r) => this.toProduct(r)!)
   }
 
+  /** Every live launch, for browse.ts to filter and count. Cached until something changes. */
+  allLive(): Product[] {
+    const stamp = this.db.query("SELECT COUNT(*) AS n, MAX(updated_at) AS u, SUM(votes) AS v, SUM(COALESCE(featured_until, 0)) AS f, COUNT(verified_at) AS c FROM products WHERE status = 'live'").get() as Record<string, number | null>
+    const key = `${stamp.n}:${stamp.u}:${stamp.v}:${stamp.f}:${stamp.c}`
+    if (this.liveCache?.key !== key) this.liveCache = { key, products: (this.db.query("SELECT * FROM products WHERE status = 'live'").all() as any[]).map((r) => this.toProduct(r)!) }
+    return this.liveCache.products
+  }
+  private liveCache: { key: string; products: Product[] } | null = null
+
   count(): { products: number; votes: number } {
     return this.db.query("SELECT (SELECT COUNT(*) FROM products WHERE status = 'live') AS products, (SELECT COUNT(*) FROM votes) AS votes").get() as { products: number; votes: number }
   }

@@ -3,6 +3,10 @@
  * BUILTINDIE_URL points it at another instance; BUILTINDIE_KEY (bi_…) is your
  * account's API key (built.indie/me), for claiming and editing your products.
  */
+export type SearchFilters = Partial<{ category: string[]; tag: string[]; has: string[]; stack: string[]; maker: string[]; launched: string; sort: string; page: number; limit: number }>
+export type FacetValue = { value: string; label: string; count: number }
+export type SearchResult = { total: number; page: number; pages: number; products: (ApiProduct & { categories: string[] })[]; facets?: Record<string, FacetValue[]>; web: string }
+
 export type ApiProduct = {
   slug: string
   name: string
@@ -73,8 +77,19 @@ export class BuiltIndieClient {
     return this.call('GET', `/api/v1/products?window=${encodeURIComponent(window)}&limit=${limit}`)
   }
 
-  search(q: string): Promise<{ products: ApiProduct[] }> {
-    return this.call('GET', `/api/v1/products?q=${encodeURIComponent(q)}`)
+  /** Search with filters; the answer carries the facets (counts per category, tag, stack…) to narrow further. */
+  search(q: string, filters: SearchFilters = {}): Promise<SearchResult> {
+    const p = new URLSearchParams()
+    if (q) p.set('q', q)
+    for (const k of ['category', 'tag', 'has', 'stack', 'maker'] as const) for (const v of filters[k] ?? []) p.append(k, v)
+    for (const k of ['launched', 'sort'] as const) if (filters[k]) p.set(k, filters[k]!)
+    if (filters.page) p.set('page', String(filters.page))
+    if (filters.limit) p.set('limit', String(filters.limit))
+    return this.call('GET', `/api/v1/search?${p}`)
+  }
+
+  categories(): Promise<{ categories: { key: string; label: string; count: number; page: string }[]; tags: { tag: string; count: number; page: string }[] }> {
+    return this.call('GET', '/api/v1/categories')
   }
 
   product(slug: string): Promise<ApiProduct> {

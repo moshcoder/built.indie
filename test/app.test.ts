@@ -457,6 +457,52 @@ describe('the site', () => {
   })
 })
 
+describe('browse and search', () => {
+  test('/search filters with facets; /c/ and /t/ pages; the API and the header search box', async () => {
+    const site = (title: string, keywords: string) => () => new Response(`<html><head><title>${title}</title><meta name="keywords" content="${keywords}"></head><body></body></html>`, { headers: { 'content-type': 'text/html' } })
+    const { call } = setup(fakeWeb({ 'https://beats.test/': site('Beats — music for coders', 'music, playlists'), 'https://vault.test/': site('Vault — encrypted backups', 'security, privacy') }))
+    for (const url of ['acme.test', 'beats.test', 'vault.test']) expect((await call('/submit', form({ url }))).status).toBe(302)
+
+    const all = await (await call('/search')).text()
+    expect(all).toContain('Browse every launch')
+    expect(all).toContain('class="top-search"')
+    expect(all).toContain('href="/search?category=music"')
+    expect(all).not.toContain('content="noindex"') // plain /search is indexable
+
+    const music = await (await call('/search?category=music')).text()
+    expect(music).toContain('Beats')
+    expect(music).not.toContain('Vault —')
+    expect(music).toContain('content="noindex"')
+    expect(music).toContain('Clear all')
+
+    const cat = await call('/c/security')
+    expect(cat.status).toBe(200)
+    const catHtml = await cat.text()
+    expect(catHtml).toContain('Vault')
+    expect(catHtml).toContain('<link rel="canonical" href="https://built.indie.pit.world/c/security">')
+    expect((await call('/c/nope')).status).toBe(404)
+    expect((await call('/c/security?tag=privacy')).headers.get('location')).toBe('/search?category=security&tag=privacy')
+    expect((await call('/t/playlists')).status).toBe(200)
+    expect((await call('/t/never-used')).status).toBe(404)
+
+    const api = (await (await call('/api/v1/search?q=encrypted')).json()) as any
+    expect(api.total).toBe(1)
+    expect(api.products[0].slug).toBe('vault')
+    expect(api.products[0].categories).toContain('security')
+    expect(api.facets.category.length).toBeGreaterThan(0)
+    expect(api.web).toBe('https://built.indie.pit.world/search?q=encrypted')
+    expect(((await (await call('/api/v1/search?q=encrypted&facets=0')).json()) as any).facets).toBeUndefined()
+    const cats = (await (await call('/api/v1/categories')).json()) as any
+    expect(cats.categories.map((c: any) => c.key)).toContain('music')
+
+    // The product page links its category and tags; the sitemap lists category pages.
+    const page = await (await call('/p/beats')).text()
+    expect(page).toContain('href="/c/music"')
+    expect(page).toContain('href="/t/playlists"')
+    expect(await (await call('/sitemap.xml')).text()).toContain('/c/music')
+  })
+})
+
 /** The claim token the service would hand this user for acme.test. */
 function setupToken(store: Store, userId: string): string {
   const svc = new BuiltIndie(store, new Media('/nonexistent'), { origin: '', coinpay: null, featureUsd: 0, featureDays: 0, chains: [], claimSecret: 'claim-secret' })

@@ -7,7 +7,8 @@
  *   builtindie show <slug>
  *   builtindie vote <slug>
  *   builtindie preview <url>           what we would read from a site, nothing saved
- *   builtindie search <words>
+ *   builtindie search [words] [--category k] [--tag t] [--has h] [--sort top|new|name]
+ *   builtindie categories              every category and tag, with counts
  *   builtindie claim <slug>            prove you own the domain (the badge or DNS TXT), BUILTINDIE_KEY
  *   builtindie me                      your launches, BUILTINDIE_KEY
  *   builtindie invite                  your invite link and free Featured credits, BUILTINDIE_KEY
@@ -29,7 +30,10 @@ export const HELP = `builtindie ${VERSION}: launch your indie product with one U
   builtindie show <slug>
   builtindie vote <slug>
   builtindie preview <url>            what we read from a site; nothing is saved
-  builtindie search <words>
+  builtindie search [words]           search; narrow with --category developer-tools --tag ai
+        [--has verified,video] [--stack Bun] [--maker "Name"] [--launched today|week|month|year]
+        [--sort relevance|top|new|name] [--page N] [--facets]
+  builtindie categories               every category and tag, with how many launches each
   builtindie claim <slug> [--md]      your badge for the homepage (or the DNS TXT record) that proves
                                       it is yours, then checks both; --md prints the steps as Markdown
                                       to paste to an AI with DNS or site access
@@ -59,7 +63,7 @@ export function parseArgs(argv: string[]): { words: string[]; flags: Record<stri
     if (a.startsWith('--')) {
       const [k, v] = a.slice(2).split(/=(.*)/s) as [string, string | undefined]
       if (v !== undefined) flags[k] = v
-      else if (argv[i + 1] !== undefined && !argv[i + 1]!.startsWith('--') && !['json', 'draft', 'md'].includes(k)) flags[k] = argv[++i]!
+      else if (argv[i + 1] !== undefined && !argv[i + 1]!.startsWith('--') && !['json', 'draft', 'md', 'facets'].includes(k)) flags[k] = argv[++i]!
       else flags[k] = true
     } else words.push(a)
   }
@@ -140,8 +144,15 @@ export async function main(argv = process.argv.slice(2), out: Out = console, cli
         return 0
       }
       case 'search': {
-        const r = await client.search(rest.join(' '))
-        show(r, r.products.map((p) => line(p)).join('\n') || 'Nothing matches.')
+        const many = (k: string) => (typeof flags[k] === 'string' ? String(flags[k]).split(',').map((v) => v.trim()).filter(Boolean) : undefined)
+        const r = await client.search(rest.join(' '), { category: many('category'), tag: many('tag'), has: many('has'), stack: many('stack'), maker: typeof flags.maker === 'string' ? [flags.maker] : undefined, launched: str('launched'), sort: str('sort'), page: Number(str('page') ?? 1) || 1, limit: Number(str('limit') ?? 30) || 30 })
+        const facets = flags.facets && r.facets ? `\n\n${Object.entries(r.facets).filter(([, v]) => v.length).map(([k, v]) => `${k}: ${v.map((f) => `${f.value} (${f.count})`).join(', ')}`).join('\n')}` : ''
+        show(r, `${r.products.map((p) => line(p)).join('\n') || 'Nothing matches.'}\n\n${r.total} match${r.total === 1 ? '' : 'es'}${r.pages > 1 ? `, page ${r.page} of ${r.pages}` : ''} · ${r.web}${facets}`)
+        return 0
+      }
+      case 'categories': {
+        const r = await client.categories()
+        show(r, `${r.categories.map((c) => `${String(c.count).padStart(4)}  ${c.label} (${c.key})`).join('\n')}\n\nTags: ${r.tags.map((t) => `${t.tag} (${t.count})`).join(', ')}`)
         return 0
       }
       case 'show': {
