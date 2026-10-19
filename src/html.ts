@@ -6,6 +6,7 @@
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import type { InviteStats, Maker, Product, User, Window } from './db.js'
+import { pitFooter } from './pit-footer.js'
 import { RING_PLACEHOLDER } from './ring.js'
 import { CHAIN_LABELS } from './service.js'
 import { icon, SOCIAL_ICONS } from './icons.js'
@@ -89,13 +90,13 @@ ${RING_PLACEHOLDER}
   </nav>
 </header>
 <main>
+${o.ads ? adUnit('text_link') : ''}
 ${o.body}
 </main>
-${o.ads ? adUnit('text_link') : ''}
 <footer>
-  <span>built.indie: launch your indie product with one URL. Free, open source.</span>
-  <span><a href="/invite">Invite a maker</a> · <a href="/leaderboard">Top inviters</a> · <a href="/help">API · CLI · MCP</a> · <a href="/feed.xml">RSS</a> · <a href="${REPO}">Source</a> · <a href="https://pit.world/ring">Moshpit ring</a></span>
+  <span>© built.indie · <a href="/help">API · CLI · MCP</a> · <a href="/feed.xml">RSS</a> · <a href="${REPO}">Source</a></span>
 </footer>
+${pitFooter()}
 </body>
 </html>`
 }
@@ -183,13 +184,13 @@ export function homePage(ctx: Ctx, d: { today: Product[]; featured: Product[]; y
   ${submitForm(true)}
   <p class="muted small">${d.stats.products} launched · ${d.stats.votes} upvotes · free, no sign-up to launch</p>
 </section>
+${adUnit('banner_728x90')}
 ${invitePromo(ctx, d)}
 ${d.featured.length ? `<h2 class="section-h">Featured</h2>${board(ctx, d.featured, false)}` : ''}
 <h2 class="section-h">Launching today <span class="muted small">resets at 00:00 UTC</span></h2>
 ${board(ctx, d.today) || `<p class="empty">Nothing launched yet today. <a href="/submit">Be first</a>: first launch of the day gets the top spot until someone beats it.</p>`}
 ${d.yesterday.length ? `<h2 class="section-h">Yesterday’s winners</h2>${board(ctx, d.yesterday.slice(0, 3))}` : ''}
-<p class="center"><a href="/top/week">This week</a> · <a href="/top/month">This month</a> · <a href="/top/all">All time</a> · <a href="/new">Newest</a></p>
-${adUnit('banner_728x90')}`,
+<p class="center"><a href="/top/week">This week</a> · <a href="/top/month">This month</a> · <a href="/top/all">All time</a> · <a href="/new">Newest</a></p>`,
   })
 }
 
@@ -207,8 +208,7 @@ export function boardPage(ctx: Ctx, window: Window, products: Product[], q?: str
     body: `<h1 class="page-h">${q ? `Search: ${esc(q)}` : esc(WINDOW_TITLES[window])}</h1>
 <nav class="tabs" aria-label="Boards">${tabs}</nav>
 <form class="search" method="get" action="/search"><label class="sr" for="q">Search</label><input id="q" name="q" placeholder="Search launches" value="${esc(q ?? '')}"></form>
-${board(ctx, products, window !== 'new') || '<p class="empty">Nothing here yet.</p>'}
-${adUnit('banner_300x250')}`,
+${board(ctx, products, window !== 'new') || '<p class="empty">Nothing here yet.</p>'}`,
   })
 }
 
@@ -297,7 +297,8 @@ ${p.videos.length ? `<div class="videos">${p.videos.map((v) => (v.embed ? `<div 
   ${p.makerName || d.maker ? `<p class="maker">Made by ${d.maker ? `<a href="/makers/${esc(d.maker.id)}">${esc(p.makerName || d.maker.name)}</a>${p.makerVerified ? ' <span class="tick" title="Their OpenProfile names this product">✓</span>' : ''}` : esc(p.makerName)}</p>` : ''}
   <p class="muted small">Launched ${p.launchedAt ? new Date(p.launchedAt).toISOString().slice(0, 10) : 'soon'} · ${p.votes} upvote${p.votes === 1 ? '' : 's'} · <a href="/p/${esc(p.slug)}/opensite.json">OpenSite record</a> · <a href="/p/${esc(p.slug)}/openprofile.md">OpenProfile.md</a></p>
 </div>
-${live ? `<h2 class="section-h">Share it</h2>${share(ctx.origin, p)}
+${live ? `${adUnit('banner_300x250')}
+<h2 class="section-h">Share it</h2>${share(ctx.origin, p)}
 <details class="card" id="badge"${p.verifiedAt || !d.canEdit ? '' : ' open'}>
   <summary>Add the badge to your site</summary>
   <p class="muted">Put this on your homepage. It shows your live upvote count, and once we see it your link here becomes a followed link and you get the ✓.</p>
@@ -309,8 +310,7 @@ ${d.payments || d.canEdit ? `<details class="card" id="feature"${d.canEdit && d.
   <p class="muted">Pinned above today’s board on the homepage for ${d.featureDays} days.</p>
   ${d.canEdit && d.credits ? `<form method="post" action="/p/${esc(p.slug)}/credit" class="row"><button class="btn">${icon('star')} Use a free invite credit</button><span class="muted small">${d.credits} left</span></form>` : `<p class="muted small">Free: ${esc(inviteOffer(d.featureDays, d.featureUsd))} <a href="/invite">Get your invite link</a>.</p>`}
   ${d.payments ? `<form method="post" action="/p/${esc(p.slug)}/feature" class="row"><label class="sr" for="chain">Pay with</label><select id="chain" name="chain">${d.chains.map((c) => `<option value="${esc(c)}">${esc(CHAIN_LABELS[c] ?? c)}</option>`).join('')}</select><button class="btn${d.canEdit && d.credits ? ' ghost' : ''}">Pay $${esc(d.featureUsd)} in crypto</button></form>` : ''}
-</details>` : ''}
-${adUnit('banner_300x250')}` : ''}`,
+</details>` : ''}` : ''}`,
   })
 }
 

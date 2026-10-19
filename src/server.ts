@@ -16,6 +16,7 @@ import { privateAddress } from './fetch.js'
 import { badgeSvg, boardPage, cardImage, claimBadgeSnippet, claimMarkdown, claimPage, editPage, esc, helpPage, homePage, inviteLanding, invitePage, leaderboardPage, loginPage, makerPage, mePage, messagePage, productPage, submitPage, type Ctx, type InviterRow } from './html.js'
 import { inviteLeaderboard } from './leaderboard.js'
 import { IMAGE_TYPES, Media } from './media.js'
+import { startPitFooterRefresh } from './pit-footer.js'
 import { RING_PLACEHOLDER, ringBar, startRingRefresh, visitorOnMoshpit } from './ring.js'
 import { BuiltIndie, CLAIM_LABEL, CLAIM_PREFIX, DEFAULT_CHAINS, InputError, type Config, type Edit } from './service.js'
 import { autofetch, FetchError } from './fetch.js'
@@ -746,6 +747,7 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   const app = createApp({ service, auth: new Auth(store, mailer), adminKey: env.BUILTINDIE_ADMIN_KEY, mailer })
   const relays = (env.BUILTINDIE_RELAY_IPS ?? '23.95.228.174,127.0.0.1,::1').split(/[\s,]+/).filter(Boolean)
   startRingRefresh()
+  startPitFooterRefresh('built.indie')
   // Drafts nobody launched within a day go, pictures too.
   const sweep = () => void Promise.all(store.sweepDrafts().map((id) => media.remove(id))).catch(() => {})
   sweep()
