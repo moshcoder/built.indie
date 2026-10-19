@@ -1,0 +1,115 @@
+/**
+ * The built.indie API from anywhere: the CLI, the TUI and the MCP server use this.
+ * BUILTINDIE_URL points it at another instance; BUILTINDIE_KEY (bi_…) is your
+ * account's API key (built.indie/me), for claiming and editing your products.
+ */
+export type ApiProduct = {
+  slug: string
+  name: string
+  tagline: string
+  description: string
+  url: string
+  domain: string
+  status: string
+  votes: number
+  tags: string[]
+  logo: string | null
+  card_image: string | null
+  screenshot: string | null
+  images: string[]
+  videos: { kind: string; url: string; embed: string | null }[]
+  socials: Record<string, string>
+  llms: { url: string; title: string; summary: string } | null
+  profile: { url: string; kind: string | null; name: string; headline: string } | null
+  maker: { name: string; profile: string | null; verified: boolean; page: string | null } | null
+  verified: boolean
+  featured_until: string | null
+  launched_at: string | null
+  page: string
+  badge: string
+  opensite: string
+  openprofile: string
+  award?: { day: string; rank: number } | null
+}
+
+export type Launched = { product: ApiProduct; claim_url?: string; existing?: boolean }
+export type ClaimRecord = { type: string; name: string; value: string }
+
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+  }
+}
+
+export class BuiltIndieClient {
+  readonly base: string
+  constructor(base = process.env.BUILTINDIE_URL ?? 'https://built.indie.pit.world', private readonly key = process.env.BUILTINDIE_KEY, private readonly doFetch: typeof fetch = fetch) {
+    this.base = base.replace(/\/+$/, '')
+  }
+
+  private async call<T>(method: string, path: string, body?: unknown, key = this.key): Promise<T> {
+    const response = await this.doFetch(this.base + path, {
+      method,
+      headers: { accept: 'application/json', ...(body ? { 'content-type': 'application/json' } : {}), ...(key ? { authorization: `Bearer ${key}` } : {}) },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+      signal: AbortSignal.timeout(90_000),
+    })
+    const data = (await response.json().catch(() => ({}))) as { error?: string }
+    if (!response.ok) throw new ApiError(data.error ?? `built.indie answered ${response.status}`, response.status)
+    return data as T
+  }
+
+  launch(url: string, o: { makerName?: string; makerProfile?: string; name?: string; tagline?: string; description?: string; tags?: string[]; videos?: string[]; publish?: boolean } = {}): Promise<Launched> {
+    return this.call('POST', '/api/v1/products', { url, maker_name: o.makerName, maker_profile: o.makerProfile, name: o.name, tagline: o.tagline, description: o.description, tags: o.tags, videos: o.videos, publish: o.publish ?? true })
+  }
+
+  preview(url: string): Promise<Record<string, unknown>> {
+    return this.call('POST', '/api/v1/preview', { url })
+  }
+
+  list(window = 'today', limit = 30): Promise<{ window: string; products: ApiProduct[] }> {
+    return this.call('GET', `/api/v1/products?window=${encodeURIComponent(window)}&limit=${limit}`)
+  }
+
+  search(q: string): Promise<{ products: ApiProduct[] }> {
+    return this.call('GET', `/api/v1/products?q=${encodeURIComponent(q)}`)
+  }
+
+  product(slug: string): Promise<ApiProduct> {
+    return this.call('GET', `/api/v1/products/${encodeURIComponent(slug)}`)
+  }
+
+  vote(slug: string): Promise<{ slug: string; votes: number; counted: boolean }> {
+    return this.call('POST', `/api/v1/products/${encodeURIComponent(slug)}/vote`, {})
+  }
+
+  private needKey(key?: string): string {
+    const k = key ?? this.key
+    if (!k) throw new ApiError('Set BUILTINDIE_KEY to your API key: sign in at built.indie.pit.world/me and make one', 401)
+    return k
+  }
+
+  claimRecord(slug: string): Promise<{ owner: boolean; record: ClaimRecord }> {
+    return this.call('GET', `/api/v1/products/${encodeURIComponent(slug)}/claim`, undefined, this.needKey())
+  }
+
+  claim(slug: string): Promise<{ claimed: boolean; looked: string[]; record: ClaimRecord }> {
+    return this.call('POST', `/api/v1/products/${encodeURIComponent(slug)}/claim`, {}, this.needKey())
+  }
+
+  me(): Promise<{ email: string; products: (ApiProduct & { owner: boolean })[] }> {
+    return this.call('GET', '/api/v1/me', undefined, this.needKey())
+  }
+
+  edit(slug: string, patch: Record<string, unknown>, key?: string): Promise<ApiProduct> {
+    return this.call('PATCH', `/api/v1/products/${encodeURIComponent(slug)}`, patch, this.needKey(key))
+  }
+
+  act(slug: string, action: 'publish' | 'refetch', key?: string): Promise<ApiProduct> {
+    return this.call('POST', `/api/v1/products/${encodeURIComponent(slug)}/${action}`, {}, this.needKey(key))
+  }
+
+  verify(slug: string): Promise<{ verified: boolean }> {
+    return this.call('POST', `/api/v1/products/${encodeURIComponent(slug)}/verify`, {})
+  }
+}

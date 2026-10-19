@@ -1,0 +1,574 @@
+{
+  "openicon": "0.1",
+  "name": "OpenIcon (built.indie subset)",
+  "version": "2026-10-10",
+  "license": "MIT",
+  "homepage": "https://github.com/profullstack/openicon",
+  "made_by": "ai",
+  "disclosure": "ai-generated",
+  "ai_model": "claude-opus-5-5",
+  "ai_provider": "Anthropic",
+  "grid": {
+    "size": 24,
+    "stroke": 2,
+    "padding": 2
+  },
+  "source": "https://github.com/profullstack/openicon/blob/main/openicon.json",
+  "icons": [
+    {
+      "key": "check",
+      "name": "Check",
+      "category": "action",
+      "keywords": [
+        "done",
+        "ok",
+        "tick",
+        "confirm"
+      ],
+      "svg": "svg/check.svg",
+      "tui": {
+        "nerd": "󰄬",
+        "nerd_code": "f012c",
+        "nerd_name": "md-check",
+        "unicode": "✓",
+        "ascii": "v"
+      }
+    },
+    {
+      "key": "search",
+      "name": "Search",
+      "category": "action",
+      "aliases": [
+        "magnify",
+        "find"
+      ],
+      "keywords": [
+        "lookup"
+      ],
+      "svg": "svg/search.svg",
+      "tui": {
+        "nerd": "󰍉",
+        "nerd_code": "f0349",
+        "nerd_name": "md-magnify",
+        "unicode": "🔍",
+        "ascii": "?"
+      }
+    },
+    {
+      "key": "share",
+      "name": "Share",
+      "category": "action",
+      "svg": "svg/share.svg",
+      "tui": {
+        "nerd": "󱔔",
+        "nerd_code": "f1514",
+        "nerd_name": "md-share_variant_outline",
+        "unicode": "⤴",
+        "ascii": "<"
+      }
+    },
+    {
+      "key": "external-link",
+      "name": "External link",
+      "category": "action",
+      "aliases": [
+        "open-in-new"
+      ],
+      "keywords": [
+        "open-new",
+        "launch"
+      ],
+      "svg": "svg/external-link.svg",
+      "tui": {
+        "nerd": "󰏌",
+        "nerd_code": "f03cc",
+        "nerd_name": "md-open_in_new",
+        "unicode": "↗",
+        "ascii": "->]"
+      }
+    },
+    {
+      "key": "star",
+      "name": "Star",
+      "category": "action",
+      "aliases": [
+        "favorite"
+      ],
+      "keywords": [
+        "rating"
+      ],
+      "svg": "svg/star.svg",
+      "tui": {
+        "nerd": "󰓒",
+        "nerd_code": "f04d2",
+        "nerd_name": "md-star_outline",
+        "unicode": "★",
+        "ascii": "*"
+      }
+    },
+    {
+      "key": "tag",
+      "name": "Tag",
+      "category": "action",
+      "aliases": [
+        "label"
+      ],
+      "svg": "svg/tag.svg",
+      "tui": {
+        "nerd": "󰓼",
+        "nerd_code": "f04fc",
+        "nerd_name": "md-tag_outline",
+        "unicode": "🏷",
+        "ascii": "#"
+      }
+    },
+    {
+      "key": "link",
+      "name": "Link",
+      "category": "action",
+      "keywords": [
+        "url",
+        "hyperlink",
+        "chain"
+      ],
+      "svg": "svg/link.svg",
+      "tui": {
+        "nerd": "󰌹",
+        "nerd_code": "f0339",
+        "nerd_name": "md-link_variant",
+        "unicode": "🔗",
+        "ascii": "~"
+      }
+    },
+    {
+      "key": "arrow-up",
+      "name": "Arrow up",
+      "category": "navigation",
+      "svg": "svg/arrow-up.svg",
+      "tui": {
+        "nerd": "󰁝",
+        "nerd_code": "f005d",
+        "nerd_name": "md-arrow_up",
+        "unicode": "↑",
+        "ascii": "^"
+      }
+    },
+    {
+      "key": "globe",
+      "name": "Globe",
+      "category": "navigation",
+      "aliases": [
+        "world",
+        "web"
+      ],
+      "keywords": [
+        "website",
+        "internet"
+      ],
+      "svg": "svg/globe.svg",
+      "tui": {
+        "nerd": "󰖟",
+        "nerd_code": "f059f",
+        "nerd_name": "md-web",
+        "unicode": "🌐",
+        "ascii": "(#)"
+      }
+    },
+    {
+      "key": "layers",
+      "name": "Layers",
+      "category": "navigation",
+      "keywords": [
+        "stack"
+      ],
+      "svg": "svg/layers.svg",
+      "tui": {
+        "nerd": "󰧾",
+        "nerd_code": "f09fe",
+        "nerd_name": "md-layers_outline",
+        "unicode": "☰",
+        "ascii": "="
+      }
+    },
+    {
+      "key": "mail",
+      "name": "Mail",
+      "category": "communication",
+      "aliases": [
+        "email",
+        "envelope"
+      ],
+      "keywords": [
+        "message",
+        "inbox"
+      ],
+      "svg": "svg/mail.svg",
+      "tui": {
+        "nerd": "󰇰",
+        "nerd_code": "f01f0",
+        "nerd_name": "md-email_outline",
+        "unicode": "✉",
+        "ascii": "@"
+      }
+    },
+    {
+      "key": "user",
+      "name": "User",
+      "category": "communication",
+      "aliases": [
+        "person",
+        "account",
+        "profile"
+      ],
+      "svg": "svg/user.svg",
+      "tui": {
+        "nerd": "󰀓",
+        "nerd_code": "f0013",
+        "nerd_name": "md-account_outline",
+        "unicode": "👤",
+        "ascii": "@"
+      }
+    },
+    {
+      "key": "dollar",
+      "name": "Dollar",
+      "category": "commerce",
+      "aliases": [
+        "usd",
+        "currency"
+      ],
+      "keywords": [
+        "money",
+        "price"
+      ],
+      "svg": "svg/dollar.svg",
+      "tui": {
+        "nerd": "󰇁",
+        "nerd_code": "f01c1",
+        "nerd_name": "md-currency_usd",
+        "unicode": "$",
+        "ascii": "$"
+      }
+    },
+    {
+      "key": "terminal",
+      "name": "Terminal",
+      "category": "dev",
+      "aliases": [
+        "console",
+        "shell",
+        "cli"
+      ],
+      "keywords": [
+        "command-line"
+      ],
+      "svg": "svg/terminal.svg",
+      "tui": {
+        "nerd": "󰆍",
+        "nerd_code": "f018d",
+        "nerd_name": "md-console",
+        "unicode": "⌨",
+        "ascii": ">_"
+      }
+    },
+    {
+      "key": "code",
+      "name": "Code",
+      "category": "dev",
+      "aliases": [
+        "source-code"
+      ],
+      "keywords": [
+        "source",
+        "html",
+        "develop"
+      ],
+      "svg": "svg/code.svg",
+      "tui": {
+        "nerd": "󰅴",
+        "nerd_code": "f0174",
+        "nerd_name": "md-code_tags",
+        "unicode": "⟨⟩",
+        "ascii": "</>"
+      }
+    },
+    {
+      "key": "trophy",
+      "name": "Trophy",
+      "category": "misc",
+      "aliases": [
+        "prize"
+      ],
+      "keywords": [
+        "winner",
+        "leaderboard"
+      ],
+      "svg": "svg/trophy.svg",
+      "tui": {
+        "nerd": "󰔺",
+        "nerd_code": "f053a",
+        "nerd_name": "md-trophy_outline",
+        "unicode": "🏆",
+        "ascii": "\\_/"
+      }
+    },
+    {
+      "key": "rocket",
+      "name": "Rocket",
+      "category": "misc",
+      "aliases": [
+        "deploy"
+      ],
+      "keywords": [
+        "launch",
+        "ship",
+        "startup"
+      ],
+      "svg": "svg/rocket.svg",
+      "tui": {
+        "nerd": "󱓟",
+        "nerd_code": "f14df",
+        "nerd_name": "md-rocket_launch_outline",
+        "unicode": "🚀",
+        "ascii": "^"
+      }
+    },
+    {
+      "key": "github",
+      "name": "GitHub",
+      "category": "brand",
+      "brand": true,
+      "trademark": "GitHub and its logo are trademarks of their owner. Use them to refer to GitHub, not to imply endorsement.",
+      "source": "simple-icons:github",
+      "license": "CC0-1.0",
+      "made_by": "human",
+      "svg": "svg/github.svg",
+      "tui": {
+        "nerd": "󰊤",
+        "nerd_code": "f02a4",
+        "nerd_name": "md-github",
+        "unicode": "🐙",
+        "ascii": "gh"
+      }
+    },
+    {
+      "key": "x",
+      "name": "X",
+      "category": "brand",
+      "aliases": [
+        "twitter"
+      ],
+      "brand": true,
+      "trademark": "X and its logo are trademarks of their owner. Use them to refer to X, not to imply endorsement.",
+      "source": "simple-icons:x",
+      "license": "CC0-1.0",
+      "made_by": "human",
+      "svg": "svg/x.svg",
+      "tui": {
+        "nerd": "󰬅",
+        "nerd_code": "f0b05",
+        "nerd_name": "md-alpha_x",
+        "unicode": "𝕏",
+        "ascii": "x"
+      }
+    },
+    {
+      "key": "bluesky",
+      "name": "Bluesky",
+      "category": "brand",
+      "brand": true,
+      "trademark": "Bluesky and its logo are trademarks of their owner. Use them to refer to Bluesky, not to imply endorsement.",
+      "source": "simple-icons:bluesky",
+      "license": "CC0-1.0",
+      "made_by": "human",
+      "svg": "svg/bluesky.svg",
+      "tui": {
+        "nerd": "󱖉",
+        "nerd_code": "f1589",
+        "nerd_name": "md-butterfly",
+        "unicode": "🦋",
+        "ascii": "bsky"
+      }
+    },
+    {
+      "key": "instagram",
+      "name": "Instagram",
+      "category": "brand",
+      "brand": true,
+      "trademark": "Instagram and its logo are trademarks of their owner. Use them to refer to Instagram, not to imply endorsement.",
+      "source": "simple-icons:instagram",
+      "license": "CC0-1.0",
+      "made_by": "human",
+      "svg": "svg/instagram.svg",
+      "tui": {
+        "nerd": "󰋾",
+        "nerd_code": "f02fe",
+        "nerd_name": "md-instagram",
+        "unicode": "📷",
+        "ascii": "ig"
+      }
+    },
+    {
+      "key": "tiktok",
+      "name": "TikTok",
+      "category": "brand",
+      "brand": true,
+      "trademark": "TikTok and its logo are trademarks of their owner. Use them to refer to TikTok, not to imply endorsement.",
+      "source": "simple-icons:tiktok",
+      "license": "CC0-1.0",
+      "made_by": "human",
+      "svg": "svg/tiktok.svg",
+      "tui": {
+        "nerd": "󰎇",
+        "nerd_code": "f0387",
+        "nerd_name": "md-music_note",
+        "unicode": "♪",
+        "ascii": "tt"
+      }
+    },
+    {
+      "key": "youtube",
+      "name": "YouTube",
+      "category": "brand",
+      "brand": true,
+      "trademark": "YouTube and its logo are trademarks of their owner. Use them to refer to YouTube, not to imply endorsement.",
+      "source": "simple-icons:youtube",
+      "license": "CC0-1.0",
+      "made_by": "human",
+      "svg": "svg/youtube.svg",
+      "tui": {
+        "nerd": "󰗃",
+        "nerd_code": "f05c3",
+        "nerd_name": "md-youtube",
+        "unicode": "▶",
+        "ascii": "yt"
+      }
+    },
+    {
+      "key": "reddit",
+      "name": "Reddit",
+      "category": "brand",
+      "brand": true,
+      "trademark": "Reddit and its logo are trademarks of their owner. Use them to refer to Reddit, not to imply endorsement.",
+      "source": "simple-icons:reddit",
+      "license": "CC0-1.0",
+      "made_by": "human",
+      "svg": "svg/reddit.svg",
+      "tui": {
+        "nerd": "󰑍",
+        "nerd_code": "f044d",
+        "nerd_name": "md-reddit",
+        "unicode": "👽",
+        "ascii": "rd"
+      }
+    },
+    {
+      "key": "discord",
+      "name": "Discord",
+      "category": "brand",
+      "brand": true,
+      "trademark": "Discord and its logo are trademarks of their owner. Use them to refer to Discord, not to imply endorsement.",
+      "source": "simple-icons:discord",
+      "license": "CC0-1.0",
+      "made_by": "human",
+      "svg": "svg/discord.svg",
+      "tui": {
+        "nerd": "󰙯",
+        "nerd_code": "f066f",
+        "nerd_name": "md-discord",
+        "unicode": "🎮",
+        "ascii": "dc"
+      }
+    },
+    {
+      "key": "telegram",
+      "name": "Telegram",
+      "category": "brand",
+      "brand": true,
+      "trademark": "Telegram and its logo are trademarks of their owner. Use them to refer to Telegram, not to imply endorsement.",
+      "source": "simple-icons:telegram",
+      "license": "CC0-1.0",
+      "made_by": "human",
+      "svg": "svg/telegram.svg",
+      "tui": {
+        "nerd": "",
+        "nerd_code": "f2c6",
+        "nerd_name": "fa-telegram",
+        "unicode": "✈",
+        "ascii": "tg"
+      }
+    },
+    {
+      "key": "product-hunt",
+      "name": "Product Hunt",
+      "category": "brand",
+      "brand": true,
+      "trademark": "Product Hunt and its logo are trademarks of their owner. Use them to refer to Product Hunt, not to imply endorsement.",
+      "source": "simple-icons:producthunt",
+      "license": "CC0-1.0",
+      "made_by": "human",
+      "svg": "svg/product-hunt.svg",
+      "tui": {
+        "nerd": "",
+        "nerd_code": "f288",
+        "nerd_name": "fa-product_hunt",
+        "unicode": "Ⓟ",
+        "ascii": "ph"
+      }
+    },
+    {
+      "key": "apple",
+      "name": "Apple",
+      "category": "brand",
+      "brand": true,
+      "trademark": "Apple and its logo are trademarks of their owner. Use them to refer to Apple, not to imply endorsement.",
+      "source": "simple-icons:apple",
+      "license": "CC0-1.0",
+      "made_by": "human",
+      "svg": "svg/apple.svg",
+      "tui": {
+        "nerd": "󰀵",
+        "nerd_code": "f0035",
+        "nerd_name": "md-apple",
+        "unicode": "🍎",
+        "ascii": "mac"
+      }
+    },
+    {
+      "key": "chrome",
+      "name": "Chrome",
+      "category": "brand",
+      "brand": true,
+      "trademark": "Chrome and its logo are trademarks of their owner. Use them to refer to Chrome, not to imply endorsement.",
+      "source": "simple-icons:googlechrome",
+      "license": "CC0-1.0",
+      "made_by": "human",
+      "svg": "svg/chrome.svg",
+      "tui": {
+        "nerd": "󰊯",
+        "nerd_code": "f02af",
+        "nerd_name": "md-google_chrome",
+        "unicode": "◉",
+        "ascii": "chr"
+      }
+    },
+    {
+      "key": "linkedin",
+      "name": "LinkedIn",
+      "category": "brand",
+      "brand": true,
+      "trademark": "LinkedIn and its logo are trademarks of their owner. Use them to refer to LinkedIn, not to imply endorsement.",
+      "source": "font-awesome:linkedin",
+      "license": "CC-BY-4.0",
+      "made_by": "human",
+      "svg": "svg/linkedin.svg",
+      "tui": {
+        "nerd": "󰌻",
+        "nerd_code": "f033b",
+        "nerd_name": "md-linkedin",
+        "unicode": "ⓘ",
+        "ascii": "in"
+      }
+    }
+  ]
+}
