@@ -12,6 +12,7 @@ import { clientIp, createApp } from '../src/server.ts'
 import { BuiltIndie, CLAIM_PREFIX, publicTxt } from '../src/service.ts'
 import { initialState, onKey } from '../src/tui.ts'
 import { glyph, icon } from '../src/icons.ts'
+import { cleanTags, inferTags, normalizeTag, tagsFor } from '../src/tags.ts'
 
 const PNG = (w: number, h: number) => {
   const b = new Uint8Array(33)
@@ -160,6 +161,18 @@ describe('autofetch', () => {
     await expect(autofetch('acme.test', web)).rejects.toThrow('public internet')
     const rebind = { ...fakeWeb(), resolve: async () => ['127.0.0.1'] }
     await expect(autofetch('acme.test', rebind)).rejects.toThrow('public internet')
+  })
+
+  test('tag helpers', () => {
+    expect(normalizeTag('#Developer Tools')).toBe('developer tools')
+    expect(normalizeTag('BusinessApplication')).toBe('business')
+    expect(normalizeTag('x')).toBeNull()
+    expect(cleanTags(['AI', 'ai', '#ai', 'Open  Source', 'a'])).toEqual(['ai', 'open source'])
+    expect(inferTags('Follow any team in the world and get told before they play. Never miss a game.')).toEqual(['alerts', 'sports'])
+    expect(inferTags('Rent a US phone number that receives SMS and one-time codes')).toEqual(['sms', 'verification'])
+    expect(inferTags('Nothing to see here')).toEqual([])
+    expect(tagsFor(['Games'], { description: 'an sms tool' })).toEqual(['games'])
+    expect(tagsFor([], { description: 'an sms tool' })).toEqual(['sms'])
   })
 
   test('helpers', () => {
@@ -448,6 +461,43 @@ describe('the site', () => {
     expect(await (await call('/.well-known/openicon.json')).json()).toMatchObject({ openicon: '0.1' })
     expect(await (await call('/.well-known/openstack.md')).text()).toContain('# built.indie')
     expect((await call('/icons/svg/github.svg')).headers.get('content-type')).toBe('image/svg+xml')
+  })
+
+  test('tags: declared ones win, otherwise topics from the listing; browse at /tags and /t/<tag>, API and backfill', async () => {
+    const bare = `<!doctype html><html><head><title>Nightcell — Two operatives</title>
+<meta name="description" content="A co-op tactical game. Two operatives, one manufactured war. Play both sides."></head><body><h1>Two operatives</h1></body></html>`
+    const { call, store } = setup(fakeWeb({ 'https://nightcell.test/': () => new Response(bare, { headers: { 'content-type': 'text/html' } }) }))
+    await call('/submit', form({ url: 'acme.test' }))
+    await call('/submit', form({ url: 'nightcell.test' }))
+    // Acme declares keywords, a JSON-LD category and manifest categories; those are its tags.
+    expect(store.bySlug('acme')!.tags).toEqual(['invoicing', 'freelancers', 'business', 'finance'])
+    // Nightcell declares nothing, so its own words say what it is.
+    expect(store.bySlug('nightcell')!.tags).toEqual(['tactical', 'game'])
+
+    const product = await (await call('/p/nightcell')).text()
+    expect(product).toContain('<a class="tag" href="/t/game">game</a>')
+    const tags = await (await call('/tags')).text()
+    expect(tags).toContain('href="/t/game"')
+    expect(tags).toContain('href="/t/invoicing"')
+    const board = await (await call('/t/game')).text()
+    expect(board).toContain('/p/nightcell')
+    expect(board).not.toContain('/p/acme"')
+    expect((await call('/t/Game')).headers.get('location')).toBe('/t/game')
+    expect((await call('/t/x')).status).toBe(404)
+    expect((await (await call('/sitemap.xml')).text())).toContain('/t/tactical')
+
+    const api = (await (await call('/api/v1/products?tag=game')).json()) as any
+    expect(api.tag).toBe('game')
+    expect(api.products.map((p: any) => p.slug)).toEqual(['nightcell'])
+    expect((await call('/api/v1/products?tag=x')).status).toBe(400)
+    const all = (await (await call('/api/v1/tags')).json()) as any
+    expect(all.tags).toContainEqual({ tag: 'game', count: 1 })
+
+    // A listing from before inference has no tags; the backfill gives it some and leaves tagged ones alone.
+    store.update(store.bySlug('nightcell')!.id, { tags: [] })
+    expect(store.backfillTags()).toBe(1)
+    expect(store.bySlug('nightcell')!.tags).toEqual(['tactical', 'game'])
+    expect(store.bySlug('acme')!.tags).toEqual(['invoicing', 'freelancers', 'business', 'finance'])
   })
 
   test('the admin takes a listing down', async () => {

@@ -8,6 +8,7 @@
  *   builtindie vote <slug>
  *   builtindie preview <url>           what we would read from a site, nothing saved
  *   builtindie search <words>
+ *   builtindie tags [tag]              every tag, or the launches with one
  *   builtindie claim <slug>            prove you own the domain (the badge or DNS TXT), BUILTINDIE_KEY
  *   builtindie me                      your launches, BUILTINDIE_KEY
  *   builtindie invite                  your invite link and free Featured credits, BUILTINDIE_KEY
@@ -30,6 +31,7 @@ export const HELP = `builtindie ${VERSION}: launch your indie product with one U
   builtindie vote <slug>
   builtindie preview <url>            what we read from a site; nothing is saved
   builtindie search <words>
+  builtindie tags [tag]               every tag with its count, or the launches tagged <tag>
   builtindie claim <slug> [--md]      your badge for the homepage (or the DNS TXT record) that proves
                                       it is yours, then checks both; --md prints the steps as Markdown
                                       to paste to an AI with DNS or site access
@@ -142,6 +144,17 @@ export async function main(argv = process.argv.slice(2), out: Out = console, cli
       case 'search': {
         const r = await client.search(rest.join(' '))
         show(r, r.products.map((p) => line(p)).join('\n') || 'Nothing matches.')
+        return 0
+      }
+      case 'tags':
+      case 'tag': {
+        if (rest.length) {
+          const r = await client.tagged(rest.join(' '), Number(str('limit') ?? 30))
+          show(r, r.products.map((p, i) => line(p, i + 1)).join('\n') || `Nothing tagged ${r.tag} yet.`)
+        } else {
+          const r = await client.tags()
+          show(r, r.tags.map((t) => `${String(t.count).padStart(4)}  ${t.tag}`).join('\n') || 'No tags yet.')
+        }
         return 0
       }
       case 'show': {

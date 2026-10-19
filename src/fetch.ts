@@ -17,6 +17,7 @@
 import { lookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
 import { accounts, identityValue, kindOf as kindOfProfile, parseOpenProfile, web } from '@profullstack/openprofile'
+import { tagsFor } from './tags.js'
 
 export type Video = { kind: 'youtube' | 'vimeo' | 'loom' | 'file'; url: string; embed: string | null }
 
@@ -554,13 +555,20 @@ export async function autofetch(input: string, o: FetchOptions = {}): Promise<Si
   for (const a of profile?.accounts ?? []) addSocial(a)
   for (const l of facts.links) addSocial(l)
 
-  const tags = [
-    ...new Set(
-      [...String(m['keywords'] ?? '').split(','), ...asArray(app?.applicationCategory).map(String), ...asArray(manifest?.categories).map(String)]
-        .map((t) => t.toLowerCase().replace(/application$/, '').replace(/[^a-z0-9 +#.-]/g, '').trim())
-        .filter((t) => t.length >= 2 && t.length <= 24),
-    ),
-  ].slice(0, 6)
+  // Tags: what the site declares (opensite.json, keywords meta, article:tag, JSON-LD keywords,
+  // category and genre, manifest categories); else topics read from its own words.
+  const words = (v: unknown) => asArray(v).flatMap((k) => String(k ?? '').split(','))
+  const tags = tagsFor(
+    [
+      ...words(declared?.tags),
+      ...words(declared?.keywords),
+      ...words(m['keywords']),
+      ...words(m['article:tag']),
+      ...[app, org, site].flatMap((d) => [...words(d?.keywords), ...words(d?.applicationCategory), ...words(d?.genre)]),
+      ...words(manifest?.categories),
+    ],
+    { name, tagline, description },
+  )
 
   return {
     url: base.href,

@@ -21,6 +21,7 @@ import { keyedSection, listSection, makeOpenProfile, renderOpenProfile } from '@
 import { autofetch, clip, FetchError, normalizeUrl, readProfile, safeFetch, SOCIAL_KINDS, videoFrom, type FetchOptions, type SiteInfo, type Video } from './fetch.js'
 import { Media, screenshot } from './media.js'
 import { dayOf, makerIdFor, newId, Store, type Product, type User } from './db.js'
+import { cleanTags } from './tags.js'
 
 export class InputError extends Error {
   constructor(message: string, readonly field?: string) {
@@ -269,7 +270,7 @@ export class BuiltIndie {
     }
     if (e.tagline !== undefined) patch.tagline = clip(e.tagline, 90)
     if (e.description !== undefined) patch.description = clip(e.description, 1200)
-    if (e.tags !== undefined) patch.tags = [...new Set(list(e.tags).map((t) => t.toLowerCase().replace(/^#/, '').replace(/[^a-z0-9 +#.-]/g, '').slice(0, 24)).filter((t) => t.length >= 2))].slice(0, 6)
+    if (e.tags !== undefined) patch.tags = cleanTags(list(e.tags))
     if (e.makerName !== undefined) patch.makerName = clip(e.makerName, 60)
     if (e.videos !== undefined) {
       const videos: Video[] = []

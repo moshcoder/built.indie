@@ -11,6 +11,7 @@
 import { Database } from 'bun:sqlite'
 import { createHash, createHmac, randomBytes } from 'node:crypto'
 import type { Pricing, Profile, Stack, Video } from './fetch.js'
+import { inferTags } from './tags.js'
 
 /** What a product says about itself in the other LogicSRC files: OpenStack.md, OpenSaaS, OpenIcon. */
 export type Extras = { stack: Stack | null; pricing: Pricing | null; openicon: string | null }
@@ -67,7 +68,7 @@ export const newId = (bytes = 9) => randomBytes(bytes).toString('base64url')
 export const makerIdFor = (profileUrl: string) => createHash('sha256').update(profileUrl.toLowerCase()).digest('base64url').slice(0, 10)
 
 /** Paths that are pages, never product slugs. */
-const RESERVED = new Set(['submit', 'new', 'top', 'api', 'm', 'p', 'b', 'makers', 'help', 'about', 'feed', 'badge', 'hooks', 'health', 'ring', 'well-known', 'admin', 'today', 'week', 'month', 'all', 'featured', 'edit', 'i', 'invite', 'leaderboard'])
+const RESERVED = new Set(['submit', 'new', 'top', 'api', 'm', 'p', 'b', 'makers', 'help', 'about', 'feed', 'badge', 'hooks', 'health', 'ring', 'well-known', 'admin', 'today', 'week', 'month', 'all', 'featured', 'edit', 'i', 'invite', 'leaderboard', 't', 'tags'])
 
 export function slugify(name: string): string {
   const s = name
@@ -190,6 +191,19 @@ export class Store {
     const has = (table: string, col: string) => (this.db.query(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((c) => c.name === col)
     if (!has('users', 'display_name')) this.db.exec('ALTER TABLE users ADD COLUMN display_name TEXT')
     if (!has('magic_links', 'ref')) this.db.exec('ALTER TABLE magic_links ADD COLUMN ref TEXT')
+    this.backfillTags()
+  }
+
+  /** Listings launched before tags were inferred get topics from their own words; tagged ones are left alone. */
+  backfillTags(): number {
+    const rows = this.db.query("SELECT id, name, tagline, description FROM products WHERE tags = '[]'").all() as { id: string; name: string; tagline: string; description: string }[]
+    const set = this.db.query('UPDATE products SET tags = ? WHERE id = ?')
+    let n = 0
+    for (const r of rows) {
+      const tags = inferTags([r.name, r.tagline, r.description].filter(Boolean).join('. '))
+      if (tags.length) set.run(JSON.stringify(tags), r.id), n++
+    }
+    return n
   }
 
   /** One visitor, per product, without keeping their address. */
@@ -473,6 +487,16 @@ export class Store {
   search(q: string, limit = 30): Product[] {
     const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`
     return (this.db.query("SELECT * FROM products WHERE status = 'live' AND (name LIKE ? ESCAPE '\\' OR tagline LIKE ? ESCAPE '\\' OR domain LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\') ORDER BY votes DESC LIMIT ?").all(like, like, like, like, limit) as any[]).map((r) => this.toProduct(r)!)
+  }
+
+  /** Live products with this exact tag, best first. */
+  byTag(tag: string, limit = 50): Product[] {
+    return (this.db.query("SELECT p.* FROM products p WHERE p.status = 'live' AND EXISTS (SELECT 1 FROM json_each(p.tags) WHERE value = ?) ORDER BY p.votes DESC, p.launched_at DESC LIMIT ?").all(tag, limit) as any[]).map((r) => this.toProduct(r)!)
+  }
+
+  /** Every tag on a live product, with how many carry it; most used first. */
+  tagCounts(limit = 200): { tag: string; count: number }[] {
+    return this.db.query("SELECT t.value AS tag, COUNT(*) AS count FROM products p, json_each(p.tags) t WHERE p.status = 'live' GROUP BY t.value ORDER BY count DESC, tag LIMIT ?").all(limit) as { tag: string; count: number }[]
   }
 
   count(): { products: number; votes: number } {
