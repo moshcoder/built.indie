@@ -66,7 +66,7 @@ export function createMcpServer(client = new BuiltIndieClient()): McpServer {
   )
   server.tool(
     'claim_product',
-    'Claim a listing for its domain owner (needs BUILTINDIE_KEY). Returns the DNS TXT record to add, plus `markdown`: step-by-step instructions for whoever has DNS access. Call again once it is in DNS and claimed comes back true.',
+    'Claim a listing for its domain owner (needs BUILTINDIE_KEY). Two proofs, either works: the DNS TXT `record` to add, or the `badge` HTML (it carries this account\'s claim token) to put on the product homepage. Also returns `markdown`: step-by-step instructions for whoever has DNS or site access. Call again once either is live; claimed comes back true with `method` dns or badge. The badge also earns the followed link and the ✓.',
     { slug },
     wrap((a: { slug: string }) => client.claim(a.slug)),
   )

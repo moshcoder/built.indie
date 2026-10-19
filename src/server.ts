@@ -12,7 +12,7 @@ import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
 import { Auth, consoleMailer, resendMailer, safeNext, SESSION_COOKIE, validEmail } from './auth.js'
 import { Store, type Product, type User, type Window } from './db.js'
 import { privateAddress } from './fetch.js'
-import { badgeSvg, boardPage, cardImage, claimMarkdown, claimPage, editPage, esc, helpPage, homePage, loginPage, makerPage, mePage, messagePage, productPage, submitPage, type Ctx } from './html.js'
+import { badgeSvg, boardPage, cardImage, claimBadgeSnippet, claimMarkdown, claimPage, editPage, esc, helpPage, homePage, loginPage, makerPage, mePage, messagePage, productPage, submitPage, type Ctx } from './html.js'
 import { IMAGE_TYPES, Media } from './media.js'
 import { RING_PLACEHOLDER, ringBar, startRingRefresh, visitorOnMoshpit } from './ring.js'
 import { BuiltIndie, CLAIM_LABEL, CLAIM_PREFIX, DEFAULT_CHAINS, InputError, type Config, type Edit } from './service.js'
@@ -232,17 +232,19 @@ export function createApp(deps: Deps) {
     }
   })
 
-  // Claiming: the domain's owner proves it in DNS and takes the listing.
+  // Claiming: the domain's owner proves it in DNS, or with the badge carrying their token, and takes the listing.
   const claimRecord = (p: Product, user: User) => ({ type: 'TXT', name: `${CLAIM_LABEL}.${p.domain.replace(/^www\./, '')}`, value: `${CLAIM_PREFIX}${service.claimToken(p, user)}` })
-  const claimView = (c: Context<Env>, p: Product, user: User, extra: { result?: { ok: boolean; looked: string[] } } = {}, status = 200) =>
-    page(c, claimPage(ctxOf(c), { product: p, record: claimRecord(p, user), owner: p.ownerId === user.id, ...extra }), status)
+  const claimBadge = (p: Product, user: User) => claimBadgeSnippet(origin, p, service.claimToken(p, user))
+  const claimMd = (p: Product, user: User) => claimMarkdown(origin, p, claimRecord(p, user), claimBadge(p, user))
+  const claimView = (c: Context<Env>, p: Product, user: User, extra: { result?: { ok: boolean; looked: string[]; method?: string } } = {}, status = 200) =>
+    page(c, claimPage(ctxOf(c), { product: p, record: claimRecord(p, user), badge: claimBadge(p, user), owner: p.ownerId === user.id, ...extra }), status)
   // The same instructions as Markdown, to paste to an AI agent with DNS access.
   app.get('/p/:slug/claim.md', (c) => {
     const user = sessionUser(c)
     if (!user) return c.redirect(`/login?next=${encodeURIComponent(c.req.path)}`)
     const p = store.bySlug(c.req.param('slug'))
     if (!p || p.status === 'hidden') return c.text('not found', 404)
-    return c.body(claimMarkdown(origin, p, claimRecord(p, user)), 200, { 'content-type': 'text/markdown; charset=utf-8', 'cache-control': 'private, no-store' })
+    return c.body(claimMd(p, user), 200, { 'content-type': 'text/markdown; charset=utf-8', 'cache-control': 'private, no-store' })
   })
   app.get('/p/:slug/claim', (c) => {
     const user = sessionUser(c)
@@ -540,7 +542,7 @@ export function createApp(deps: Deps) {
     if (!user) return c.json(NEEDS_ACCOUNT, 401)
     const p = store.bySlug(c.req.param('slug'))
     if (!p || p.status === 'hidden') return c.json({ error: 'no such product' }, 404)
-    return c.json({ owner: p.ownerId === user.id, record: claimRecord(p, user), markdown: claimMarkdown(origin, p, claimRecord(p, user)) })
+    return c.json({ owner: p.ownerId === user.id, record: claimRecord(p, user), badge: claimBadge(p, user), markdown: claimMd(p, user) })
   })
   app.post('/api/v1/products/:slug/claim', async (c) => {
     const user = apiUser(c)
@@ -549,7 +551,7 @@ export function createApp(deps: Deps) {
     if (!p || p.status === 'hidden') return c.json({ error: 'no such product' }, 404)
     if (!readLimit.allow(`read:${ip(c)}`)) return c.json({ error: 'too many checks; wait a few minutes' }, 429)
     const r = await service.claim(p, user)
-    return c.json({ claimed: r.ok, looked: r.looked, record: claimRecord(p, user), ...(r.ok ? {} : { markdown: claimMarkdown(origin, p, claimRecord(p, user)) }) })
+    return c.json({ claimed: r.ok, ...(r.method ? { method: r.method } : {}), looked: r.looked, record: claimRecord(p, user), badge: claimBadge(p, user), ...(r.ok ? {} : { markdown: claimMd(p, user) }) })
   })
   app.get('/api/v1/me', (c) => {
     const user = apiUser(c)
