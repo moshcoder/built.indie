@@ -1,0 +1,37 @@
+{
+  "name": "@profullstack/builtindie",
+  "version": "0.1.0",
+  "description": "built.indie: launch your indie product with one URL. We fetch the logo, screenshots, videos, llms.txt, OpenSite and OpenProfile from your homepage; people upvote; you get a badge. Web (PWA), API, CLI, TUI and MCP.",
+  "license": "MIT",
+  "type": "module",
+  "homepage": "https://built.indie.pit.world",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/moshcoder/built.indie.git"
+  },
+  "bin": {
+    "builtindie": "bin/builtindie"
+  },
+  "files": ["bin/builtindie", "src", "public", "OpenStack.md", "README.md", "LICENSE"],
+  "engines": {
+    "bun": ">=1.1"
+  },
+  "scripts": {
+    "start": "bun src/server.ts",
+    "dev": "bun --watch src/server.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.0",
+    "@profullstack/coinpay-onboard": "^0.1.1",
+    "@profullstack/hqtui": "^0.10.3",
+    "@profullstack/openprofile": "^0.2.0",
+    "hono": "^4.13.13",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.3",
+    "typescript": "^7.0.2"
+  }
+}
