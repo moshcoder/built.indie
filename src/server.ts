@@ -445,6 +445,12 @@ export function createApp(deps: Deps) {
   }
   app.get('/badge/:file{[a-z0-9-]+\\.svg}', (c) => badgeImage(c, live(c.req.param('file').replace(/\.svg$/, ''))))
   // The same badge by badge id: the one the claim page hands out. On a homepage it claims the listing for that account.
+  // By site, for snippets shared across many sites (the Profullstack footer): ?site=<homepage>.
+  app.get('/for.svg', (c) => badgeImage(c, store.bySite(c.req.query('site') ?? '')))
+  app.get('/for', (c) => {
+    const p = store.bySite(c.req.query('site') ?? '')
+    return c.redirect(p ? `/p/${p.slug}?ref=badge` : '/')
+  })
   app.get('/images.svg', (c) => {
     const b = store.badge(c.req.query('id') ?? '')
     const p = b ? store.product(b.productId) : null
@@ -753,6 +759,12 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   const sweep = () => void Promise.all(store.sweepDrafts().map((id) => media.remove(id))).catch(() => {})
   sweep()
   setInterval(sweep, 3600_000).unref?.()
+  // Badges placed since launch only count once someone presses Verify; look again every 6 hours, a few at a time.
+  const reverify = async () => {
+    for (const p of store.unverified()) await service.verify(p).catch(() => false)
+  }
+  setTimeout(() => void reverify(), 60_000).unref?.()
+  setInterval(() => void reverify(), 6 * 3600_000).unref?.()
   return Bun.serve({
     port: options.port ?? Number(env.PORT ?? 8798),
     hostname: options.hostname ?? env.HOST ?? '127.0.0.1',

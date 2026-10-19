@@ -247,6 +247,24 @@ export class Store {
     return this.toProduct(this.db.query("SELECT * FROM products WHERE url_key = ? AND status != 'hidden' ORDER BY created_at LIMIT 1").get(Store.urlKey(url)))
   }
 
+  /** The live listing for a site's homepage (any page of it), for badges that only know the site: its homepage listing first, else any listing on that host. */
+  bySite(site: string): Product | null {
+    let host: string
+    try {
+      host = new URL(/^https?:\/\//i.test(site) ? site : `https://${site}`).hostname.replace(/^www\./, '').toLowerCase()
+    } catch {
+      return null
+    }
+    return this.toProduct(
+      this.db.query("SELECT * FROM products WHERE status = 'live' AND (url_key = ? OR domain = ? OR domain = ?) ORDER BY url_key = ? DESC, created_at LIMIT 1").get(host, host, `www.${host}`, host),
+    )
+  }
+
+  /** Live listings with no badge found yet: the re-verify sweep's work list. */
+  unverified(limit = 200): Product[] {
+    return (this.db.query("SELECT * FROM products WHERE status = 'live' AND verified_at IS NULL ORDER BY launched_at LIMIT ?").all(limit) as any[]).map((r) => this.toProduct(r)!)
+  }
+
   freeSlug(name: string): string {
     const base = slugify(name)
     let slug = base

@@ -358,6 +358,20 @@ describe('the site', () => {
     expect(store.bySlug('acme')!.ownerId).toBe(mallory.id)
   })
 
+  test('the badge by site: /for.svg?site= renders the listing for that homepage, /for?site= goes to it', async () => {
+    const { call, store } = setup()
+    await call('/submit', form({ url: 'acme.test' }))
+    const img = await call('/for.svg?site=https%3A%2F%2Fwww.acme.test%2F')
+    expect(img.status).toBe(200)
+    expect(await img.text()).toBe(await (await call('/badge/acme.svg')).text())
+    expect((await call('/for.svg?site=https://acme.test/')).status).toBe(200)
+    expect((await call('/for.svg?site=https://nobody.test/')).status).toBe(404)
+    expect((await call('/for.svg')).status).toBe(404)
+    expect((await call('/for?site=https://acme.test/')).headers.get('location')).toBe('/p/acme?ref=badge')
+    expect((await call('/for?site=https://nobody.test/')).headers.get('location')).toBe('/')
+    expect(store.unverified().map((p) => p.slug)).toEqual(['acme'])
+  })
+
   test('the badge id: one per listing and account; /images.svg?id renders it; your id claims and verifies, another account\'s only verifies', async () => {
     let home = HOME
     const web = fakeWeb({ 'https://acme.test/': () => new Response(home, { headers: { 'content-type': 'text/html' } }) })
