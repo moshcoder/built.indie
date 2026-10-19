@@ -9,7 +9,7 @@ import { Store, slugify } from '../src/db.ts'
 import { autofetch, normalizeUrl, privateAddress, readLlms, robotsBlocks, splitTitle, videoFrom } from '../src/fetch.ts'
 import { dimensions, Media, sniff } from '../src/media.ts'
 import { clientIp, createApp } from '../src/server.ts'
-import { BuiltIndie, CLAIM_PREFIX } from '../src/service.ts'
+import { BuiltIndie, CLAIM_PREFIX, publicTxt } from '../src/service.ts'
 import { initialState, onKey } from '../src/tui.ts'
 import { glyph, icon } from '../src/icons.ts'
 
@@ -350,6 +350,13 @@ describe('plumbing', () => {
     expect(glyph('mail', 'ascii')).toBe('@')
     expect(glyph('mail', 'unicode')).toBe('✉')
     expect(glyph('nope', 'unicode')).toBe('')
+  })
+
+  test('public TXT lookups ask each resolver on its own and merge what they say', async () => {
+    const down = { resolveTxt: async () => { throw Object.assign(new Error('queryTxt ENOTFOUND'), { code: 'ENOTFOUND' }) } }
+    const up = { resolveTxt: async () => [['built-indie-verify=abc']] }
+    expect(await publicTxt('x', [down as any, up as any])).toEqual([['built-indie-verify=abc']])
+    expect(await publicTxt('x', [down as any, down as any])).toEqual([])
   })
 
   test('cli args and tui keys', () => {
