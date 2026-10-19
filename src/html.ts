@@ -781,6 +781,17 @@ export function messagePage(ctx: Ctx, d: { title: string; message: string; statu
 }
 
 /** The embeddable badge: live upvotes, or the day's award once it is won. */
+/** The badge for a site with no listing (the shared footer asks for every site): an invitation to launch. */
+export function launchBadgeSvg(theme: 'dark' | 'light'): string {
+  const dark = theme === 'dark'
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="44" viewBox="0 0 200 44" role="img" aria-label="Launch yours on built.indie">
+<rect x=".5" y=".5" width="199" height="43" rx="9" fill="${dark ? '#111018' : '#ffffff'}" stroke="#ff5c39"/>
+<path d="M22 9 12 21h6v12h8V21h6z" fill="#ff5c39"/>
+<text x="42" y="18" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="8.5" font-weight="700" letter-spacing=".6" fill="${dark ? '#a7a1bd' : '#5d5870'}">LAUNCH YOURS FREE ON</text>
+<text x="42" y="33" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="15" font-weight="800" fill="${dark ? '#f4f1ff' : '#14121c'}">built.indie</text>
+</svg>`
+}
+
 export function badgeSvg(p: Product, award: { day: string; rank: number } | null, theme: 'dark' | 'light'): string {
   const dark = theme === 'dark'
   const bg = dark ? '#111018' : '#ffffff'

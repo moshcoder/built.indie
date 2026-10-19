@@ -378,10 +378,13 @@ describe('the site', () => {
     expect(img.status).toBe(200)
     expect(await img.text()).toBe(await (await call('/badge/acme.svg')).text())
     expect((await call('/for.svg?site=https://acme.test/')).status).toBe(200)
-    expect((await call('/for.svg?site=https://nobody.test/')).status).toBe(404)
-    expect((await call('/for.svg')).status).toBe(404)
+    // No listing: an invitation to launch, never a broken image.
+    const none = await call('/for.svg?site=https://nobody.test/')
+    expect(none.status).toBe(200)
+    expect(await none.text()).toContain('Launch yours on built.indie')
+    expect((await call('/for.svg')).status).toBe(200)
     expect((await call('/for?site=https://acme.test/')).headers.get('location')).toBe('/p/acme?ref=badge')
-    expect((await call('/for?site=https://nobody.test/')).headers.get('location')).toBe('/')
+    expect((await call('/for?site=https://nobody.test/')).headers.get('location')).toBe('/submit?ref=badge')
     expect(store.unverified().map((p) => p.slug)).toEqual(['acme'])
   })
 

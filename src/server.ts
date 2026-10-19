@@ -15,7 +15,7 @@ import { Auth, consoleMailer, resendMailer, safeNext, SESSION_COOKIE, validEmail
 import { Store, type Product, type User, type Window } from './db.js'
 import { privateAddress } from './fetch.js'
 import { CATEGORY_LABELS, parseQuery, queryString, search } from './browse.js'
-import { badgeSvg, boardPage, browsePage, cardImage, claimBadgeSnippet, claimMarkdown, claimPage, editPage, esc, helpPage, homePage, inviteLanding, invitePage, leaderboardPage, loginPage, makerPage, mePage, messagePage, productPage, submitPage, tagsPage, type Ctx, type InviterRow } from './html.js'
+import { badgeSvg, launchBadgeSvg, boardPage, browsePage, cardImage, claimBadgeSnippet, claimMarkdown, claimPage, editPage, esc, helpPage, homePage, inviteLanding, invitePage, leaderboardPage, loginPage, makerPage, mePage, messagePage, productPage, submitPage, tagsPage, type Ctx, type InviterRow } from './html.js'
 import { normalizeTag } from './tags.js'
 import { inviteLeaderboard } from './leaderboard.js'
 import { IMAGE_TYPES, Media } from './media.js'
@@ -455,7 +455,8 @@ export function createApp(deps: Deps) {
   })
 
   // The badge: the viral part. Cached briefly so the count stays live.
-  const badgeImage = (c: Context<Env>, p: Product | null) => {
+  const badgeImage = (c: Context<Env>, p: Product | null, unlisted = false) => {
+    if (!p && unlisted) return c.body(launchBadgeSvg(c.req.query('theme') === 'light' ? 'light' : 'dark'), 200, { 'content-type': 'image/svg+xml; charset=utf-8', 'cache-control': 'public, max-age=3600', 'access-control-allow-origin': '*', 'cross-origin-resource-policy': 'cross-origin', 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'" })
     if (!p) return c.body('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>', 404, { 'content-type': 'image/svg+xml' })
     return c.body(badgeSvg(p, store.awards(p.id), c.req.query('theme') === 'light' ? 'light' : 'dark'), 200, {
       'content-type': 'image/svg+xml; charset=utf-8',
@@ -468,10 +469,11 @@ export function createApp(deps: Deps) {
   app.get('/badge/:file{[a-z0-9-]+\\.svg}', (c) => badgeImage(c, live(c.req.param('file').replace(/\.svg$/, ''))))
   // The same badge by badge id: the one the claim page hands out. On a homepage it claims the listing for that account.
   // By site, for snippets shared across many sites (the Profullstack footer): ?site=<homepage>.
-  app.get('/for.svg', (c) => badgeImage(c, store.bySite(c.req.query('site') ?? '')))
+  // A site with no listing (built.indie itself, a brand-new site) gets an invitation to launch instead.
+  app.get('/for.svg', (c) => badgeImage(c, store.bySite(c.req.query('site') ?? ''), true))
   app.get('/for', (c) => {
     const p = store.bySite(c.req.query('site') ?? '')
-    return c.redirect(p ? `/p/${p.slug}?ref=badge` : '/')
+    return c.redirect(p ? `/p/${p.slug}?ref=badge` : '/submit?ref=badge')
   })
   app.get('/images.svg', (c) => {
     const b = store.badge(c.req.query('id') ?? '')
