@@ -480,7 +480,8 @@ export async function autofetch(input: string, o: FetchOptions = {}): Promise<Si
   const str = (v: unknown) => (typeof v === 'string' ? decode(v) : '')
   const [titleName, titleRest] = splitTitle(str(m['og:title']) || facts.title)
   const name = clip(
-    [declared?.name, m['og:site_name'], app?.name, manifest?.short_name, manifest?.name, m['application-name'], site?.name, org?.name, llms?.title, titleName].map(str).find((v) => v && v.length <= 40) ??
+    // A manifest's short_name is a home-screen label ("Family" for family.ancestry): last resort.
+    [declared?.name, m['og:site_name'], app?.name, m['application-name'], manifest?.name, site?.name, org?.name, llms?.title, titleName, manifest?.short_name].map(str).find((v) => v && v.length <= 40) ??
       base.hostname.replace(/^www\./, ''),
     60,
   )
