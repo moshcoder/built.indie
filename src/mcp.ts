@@ -9,7 +9,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { BuiltIndieClient } from './client.js'
+import { BuiltIndieClient, type SearchFilters } from './client.js'
 import { VERSION } from './version.js'
 
 const text = (value: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] })
@@ -52,7 +52,24 @@ export function createMcpServer(client = new BuiltIndieClient()): McpServer {
     { tag: z.string().min(2).max(24), limit: z.number().int().min(1).max(100).default(20) },
     wrap((a: { tag: string; limit: number }) => client.tagged(a.tag, a.limit)),
   )
-  server.tool('search', 'Search launches by name, tagline, domain or tag.', { query: z.string().min(1).max(60) }, wrap((a: { query: string }) => client.search(a.query)))
+  server.tool(
+    'search',
+    'Search and filter launches. Words match name, tags, category, domain, tagline, maker, stack and description. Narrow with categories (see list_categories), tags, has (verified, claimed, featured, video, screenshots, llms, opensite, openprofile, openstack, opensaas, maker), stack, maker and launched. The answer carries facets: counts for each value, to narrow further.',
+    {
+      query: z.string().max(80).default(''),
+      category: z.array(z.string()).max(10).optional().describe('Category keys, e.g. developer-tools, ai, crypto, security (any of them)'),
+      tag: z.array(z.string()).max(10).optional().describe('Tags (any of them)'),
+      has: z.array(z.string()).max(10).optional().describe('Every one must hold: verified, claimed, featured, video, screenshots, llms, opensite, openprofile, openstack, opensaas, maker'),
+      stack: z.array(z.string()).max(10).optional().describe('Built with (from the product\'s OpenStack.md)'),
+      maker: z.array(z.string()).max(10).optional(),
+      launched: z.enum(['today', 'week', 'month', 'year']).optional(),
+      sort: z.enum(['relevance', 'top', 'new', 'name']).optional(),
+      page: z.number().int().min(1).max(500).optional(),
+      limit: z.number().int().min(1).max(100).default(20),
+    },
+    wrap(({ query, ...filters }: { query: string } & SearchFilters) => client.search(query, filters)),
+  )
+  server.tool('list_categories', 'Every category and tag on built.indie, with how many launches each has.', {}, wrap(() => client.categories()))
   server.tool('upvote', 'Upvote a product (one vote per visitor).', { slug }, wrap((a: { slug: string }) => client.vote(a.slug)))
   server.tool(
     'edit_product',
