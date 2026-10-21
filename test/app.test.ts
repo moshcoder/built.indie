@@ -220,6 +220,8 @@ describe('the site', () => {
     const home = await (await call('/')).text()
     expect(home).toContain('/p/acme')
     expect(home).toContain('crawlproof.com/stats.js')
+    // No ad on the home page.
+    expect(home).not.toContain('crawlproof.com/api/ads')
     // The Profullstack ring is server-rendered (the verifier never runs script), and no ad sits in or against the footer.
     const footer = home.slice(home.indexOf('<footer'))
     expect(footer).toContain('https://rssamplifier.com/ring/profullstack/next?from=https%3A%2F%2Fbuilt.indie.pit.world%2F')
