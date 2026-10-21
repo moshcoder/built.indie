@@ -14,6 +14,7 @@
  *   builtindie me                      your launches, BUILTINDIE_KEY
  *   builtindie invite                  your invite link and free Featured credits, BUILTINDIE_KEY
  *   builtindie credit <slug>           spend a credit: feature a listing you own, BUILTINDIE_KEY
+ *   builtindie feature <slug>          pay to feature it: a CoinPay checkout link (any coin or PayPal), BUILTINDIE_KEY
  *   builtindie edit <slug> --tagline … (BUILTINDIE_KEY)
  *   builtindie refetch <slug>          (BUILTINDIE_KEY)
  *   builtindie mcp                     MCP server on stdio
@@ -42,6 +43,7 @@ export const HELP = `builtindie ${VERSION}: launch your indie product with one U
   builtindie me                       your launches
   builtindie invite                   your invite link; each maker it brings in who launches = a free Featured week
   builtindie credit <slug>            spend a credit to feature a listing you own
+  builtindie feature <slug> [--email you@x]  pay to feature it: prints a CoinPay checkout link (any coin or PayPal)
   builtindie edit <slug> [--name --tagline --description --tags a,b --video URL]
   builtindie refetch <slug>           read the homepage again
   builtindie publish <slug>           put a draft live
@@ -226,6 +228,11 @@ export async function main(argv = process.argv.slice(2), out: Out = console, cli
       case 'credit': {
         const r = await client.credit(rest[0] ?? '')
         show(r, `${rest[0]} is Featured until ${r.featured_until.slice(0, 10)} ★  (${r.credits} credit${r.credits === 1 ? '' : 's'} left)`)
+        return 0
+      }
+      case 'feature': {
+        const r = await client.feature(rest[0] ?? '', str('email'))
+        show(r, `Pay $${r.usd} for ${r.days} days Featured (${r.methods.join(', ')}):\n${r.checkout_url}`)
         return 0
       }
       case 'verify': {

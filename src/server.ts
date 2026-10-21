@@ -21,7 +21,7 @@ import { inviteLeaderboard } from './leaderboard.js'
 import { IMAGE_TYPES, Media } from './media.js'
 import { startPitFooterRefresh } from './pit-footer.js'
 import { RING_PLACEHOLDER, ringBar, startRingRefresh, visitorOnMoshpit } from './ring.js'
-import { BuiltIndie, CLAIM_LABEL, CLAIM_PREFIX, DEFAULT_CHAINS, InputError, type Config, type Edit } from './service.js'
+import { BuiltIndie, CLAIM_LABEL, CLAIM_PREFIX, InputError, type Config, type Edit } from './service.js'
 import { autofetch, FetchError } from './fetch.js'
 import { VERSION } from './version.js'
 
@@ -224,7 +224,7 @@ export function createApp(deps: Deps) {
           const u = sessionUser(c)
           return u && store.canEdit(p, u) ? store.inviteStats(u.id).credits : 0
         })(),
-        chains: config.chains,
+        buyerEmail: sessionUser(c)?.email ?? '',
         featureUsd: config.featureUsd,
         featureDays: config.featureDays,
         payments: Boolean(config.coinpay),
@@ -428,8 +428,9 @@ export function createApp(deps: Deps) {
     if (!p) return c.notFound()
     const form = (await c.req.parseBody()) as Record<string, string>
     try {
-      const r = await service.feature(p, form.chain ?? '')
-      return c.redirect(r.checkoutUrl)
+      const user = sessionUser(c)
+      const r = await service.feature(p, { email: form.email || user?.email || '', accountId: user?.id ?? null })
+      return c.redirect(r.checkoutUrl, 303)
     } catch (e) {
       return page(c, messagePage(ctxOf(c), { title: 'Could not start the payment', message: e instanceof Error ? e.message : String(e) }), e instanceof InputError ? 400 : 502)
     }
@@ -657,8 +658,10 @@ export function createApp(deps: Deps) {
       if (!readLimit.allow(`read:${ip(c)}`)) return c.json({ error: 'too many reads from you; wait a few minutes' }, 429)
       if (action === 'refetch') return c.json(apiProduct(await service.refetch(p)))
       if (action === 'verify') return c.json({ verified: await service.verify(p) })
-      const r = await service.feature(p, String((await body(c)).chain ?? ''))
-      return c.json({ checkout_url: r.checkoutUrl, payment: r.ref, usd: config.featureUsd, days: config.featureDays })
+      const b = await body(c)
+      const user = apiUser(c)
+      const r = await service.feature(p, { email: String(b.email ?? user?.email ?? ''), accountId: user?.id ?? null })
+      return c.json({ checkout_url: r.checkoutUrl, checkout_session_id: r.sessionId, methods: r.methods, payment: r.ref, usd: config.featureUsd, days: config.featureDays })
     } catch (e) {
       return apiError(c, e)
     }
@@ -788,13 +791,11 @@ export function configFromEnv(env: Record<string, string | undefined> = process.
     env.COINPAY_API_KEY && env.COINPAY_BUSINESS_ID
       ? { baseUrl: (env.COINPAY_API_URL ?? 'https://coinpayportal.com').replace(/\/+$/, '').replace(/\/api$/, ''), apiKey: env.COINPAY_API_KEY, businessId: env.COINPAY_BUSINESS_ID, webhookSecret: env.COINPAY_WEBHOOK_SECRET ?? '' }
       : null
-  const chains = (env.COINPAY_CHAINS ?? '').split(/[\s,]+/).filter(Boolean)
   return {
     origin: (env.BUILTINDIE_ORIGIN ?? PUBLIC_ORIGIN).replace(/\/+$/, ''),
     coinpay,
     featureUsd: Number(env.FEATURE_USD ?? 19),
     featureDays: Number(env.FEATURE_DAYS ?? 7),
-    chains: chains.length ? chains : DEFAULT_CHAINS,
     screenshots: env.BUILTINDIE_SCREENSHOTS !== 'off',
   }
 }

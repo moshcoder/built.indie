@@ -8,20 +8,22 @@
  *   claim    the domain's owner proves it (a DNS TXT record, or the badge with their token) and takes the listing
  *   refetch  read the homepage again (the maker changed their logo)
  *   verify   the maker put our badge on their site: a followed link back
- *   feature  pay in crypto (CoinPay) to sit on top for a week
+ *   feature  pay on CoinPay's hosted checkout (any coin or PayPal) to sit on top for a week
  *
  * Products are described in the LogicSRC open specs: each one is an OpenSite
  * record (logicsrc.com/docs/opensite) and an OpenProfile.md with Kind
  * organization (logicsrc.com/docs/openprofile); a maker is an OpenProfile.md
  * of their own, which we read and link to.
  */
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHmac, randomBytes } from 'node:crypto'
 import { Resolver } from 'node:dns/promises'
 import { keyedSection, listSection, makeOpenProfile, renderOpenProfile } from '@profullstack/openprofile'
 import { autofetch, clip, FetchError, normalizeUrl, readProfile, safeFetch, SOCIAL_KINDS, videoFrom, type FetchOptions, type SiteInfo, type Video } from './fetch.js'
 import { Media, screenshot } from './media.js'
 import { dayOf, makerIdFor, newId, Store, type Product, type User } from './db.js'
 import { cleanTags } from './tags.js'
+import { validEmail } from './auth.js'
+import { CoinPay, CoinPayError, readWebhook, verifyWebhook } from '@profullstack/coinpay-onboard'
 
 export class InputError extends Error {
   constructor(message: string, readonly field?: string) {
@@ -29,13 +31,12 @@ export class InputError extends Error {
   }
 }
 
-export type CoinPayConfig = { baseUrl: string; apiKey: string; businessId: string; webhookSecret: string }
+export type CoinPayConfig = { baseUrl: string; apiKey: string; businessId: string; webhookSecret: string; /** Tests pass their own. */ fetch?: typeof fetch }
 export type Config = {
   origin: string
   coinpay: CoinPayConfig | null
   featureUsd: number
   featureDays: number
-  chains: string[]
   fetch?: FetchOptions
   screenshots?: boolean
   /** Secret behind each person's claim token. */
@@ -66,12 +67,8 @@ export async function publicTxt(name: string, resolvers: Pick<Resolver, 'resolve
   return answers.flat()
 }
 
-export const CHAIN_LABELS: Record<string, string> = {
-  USDC_POL: 'USDC on Polygon', USDC_SOL: 'USDC on Solana', USDC_ETH: 'USDC on Ethereum', USDT_POL: 'USDT on Polygon',
-  BTC: 'Bitcoin', ETH: 'Ether', SOL: 'Solana', POL: 'Polygon', DOGE: 'Dogecoin', BCH: 'Bitcoin Cash', XRP: 'XRP', ADA: 'Cardano', BNB: 'BNB',
-}
-export const DEFAULT_CHAINS = Object.keys(CHAIN_LABELS)
-export const SETTLED = new Set(['paid', 'completed', 'confirmed', 'forwarded', 'succeeded', 'settled'])
+/** Who is paying for a Featured slot: the email is required by CoinPay; the account is the member id, or the email for a guest. */
+export type Buyer = { email: string; accountId?: string | null }
 
 export type Edit = Partial<{ name: string; tagline: string; description: string; tags: string[] | string; makerName: string; makerProfile: string; videos: string[] | string; socials: Record<string, string>; remove: string[] | string }>
 
@@ -394,61 +391,73 @@ export class BuiltIndie {
     )
   }
 
-  /** Start a crypto payment to feature a product; returns where to send the buyer. */
-  async feature(p: Product, chain: string, fetcher: typeof fetch = fetch): Promise<{ checkoutUrl: string; ref: string }> {
+  /**
+   * Start a CoinPay hosted checkout session to feature a product; returns where to send
+   * the buyer. The buyer picks any coin or PayPal on CoinPay's page, so there is no
+   * currency picker here.
+   */
+  async feature(p: Product, buyer: Buyer): Promise<{ checkoutUrl: string; ref: string; sessionId: string; methods: string[] }> {
     const cp = this.config.coinpay
     if (!cp) throw new InputError('Featuring is not set up on this server yet.')
     if (p.status !== 'live') throw new InputError('Publish it first.')
-    if (!this.config.chains.includes(chain)) throw new InputError('Pick a currency from the list', 'chain')
-    const res = await fetcher(`${cp.baseUrl}/api/payments/create`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${cp.apiKey}`, 'content-type': 'application/json' },
-      body: JSON.stringify({
-        business_id: cp.businessId,
+    const email = validEmail(buyer.email)
+    if (!email) throw new InputError('Enter your email: CoinPay sends the receipt there', 'email')
+    const accountId = String(buyer.accountId ?? '').trim() || email
+    const ref = `fp_${randomBytes(9).toString('base64url')}`
+    const link = this.link(p)
+    const client = new CoinPay({ token: cp.apiKey, base: cp.baseUrl, fetch: cp.fetch ?? fetch })
+    let session
+    try {
+      session = await client.createCheckoutSession({
         amount: this.config.featureUsd,
         currency: 'USD',
-        blockchain: chain,
-        payment_method: 'crypto',
         description: `built.indie: feature ${p.name} for ${this.config.featureDays} days`,
-        metadata: { product_id: p.id, product: 'feature' },
-        success_url: `${this.link(p)}?featured=1`,
-        cancel_url: this.link(p),
-      }),
-      signal: AbortSignal.timeout(20_000),
-    })
-    if (!res.ok) throw new Error(`CoinPay said ${res.status}: ${(await res.text()).slice(0, 200)}`)
-    const body = (await res.json()) as any
-    const payment = body?.payment ?? body
-    const ref = String(payment?.id ?? payment?.payment_id ?? '')
-    if (!ref) throw new Error('CoinPay returned no payment reference')
+        customerEmail: email,
+        accountId,
+        property: new URL(this.config.origin || 'https://built.indie.pit.world').hostname,
+        metadata: { product_id: p.id, product: 'feature', days: this.config.featureDays, payment_ref: ref },
+        successUrl: `${link}?featured=1`,
+        cancelUrl: link,
+        expiresInMinutes: 60,
+      })
+    } catch (e) {
+      throw new Error(`CoinPay said ${e instanceof CoinPayError ? e.status : 'error'}: ${(e as Error).message.slice(0, 200)}`)
+    }
+    if (!session?.id || !session.url) throw new Error('CoinPay returned no checkout session')
     // Written before the buyer leaves: a webhook can beat the redirect.
-    this.store.addPayment({ ref, productId: p.id, amountUsd: this.config.featureUsd, chain, days: this.config.featureDays })
-    return { checkoutUrl: `${cp.baseUrl}/pay/${ref}`, ref }
+    this.store.addPayment({ ref, productId: p.id, amountUsd: this.config.featureUsd, chain: 'checkout', days: this.config.featureDays, checkoutSessionId: session.id, email, accountId })
+    return { checkoutUrl: session.url, ref, sessionId: session.id, methods: session.methods ?? [] }
   }
 
-  /** CoinPay's webhook: `t=<unix>,v1=<hmac of "t.body">`; the payload is { data: { payment_id, status } }. */
-  webhook(raw: string, header: string | undefined, nowSeconds = Date.now() / 1000): { ok: boolean; status?: number } {
+  /**
+   * CoinPay's webhook: `X-CoinPay-Signature: t=<unix>,v1=<hmac of "t.body">` over the raw
+   * bytes; the body is nested, `{ id: evt_..., type, data: { payment_id, status,
+   * checkout_session_id, metadata } }`. Paid = payment.confirmed (a PayPal capture has
+   * status 'completed') or payment.forwarded; one session can send both, so settling is
+   * once per local payment.
+   */
+  webhook(raw: string, header: string | undefined, nowSeconds = Date.now() / 1000): { ok: boolean; status?: number; settled?: boolean } {
     const cp = this.config.coinpay
     if (!cp?.webhookSecret || !header) return { ok: false, status: 401 }
-    const parts = Object.fromEntries(header.split(',').map((kv) => kv.split('=').map((s) => s.trim())))
-    const t = Number(parts.t)
-    if (!Number.isFinite(t) || !parts.v1 || Math.abs(nowSeconds - t) > 300) return { ok: false, status: 401 }
-    const expected = Buffer.from(createHmac('sha256', cp.webhookSecret).update(`${parts.t}.${raw}`).digest('hex'), 'hex')
-    const given = Buffer.from(String(parts.v1), 'hex')
-    if (expected.length !== given.length || !timingSafeEqual(expected, given)) return { ok: false, status: 401 }
-    let payload: any
+    if (!verifyWebhook(raw, header, cp.webhookSecret, nowSeconds * 1000)) return { ok: false, status: 401 }
+    let payload: unknown
     try {
       payload = JSON.parse(raw)
     } catch {
       return { ok: false, status: 400 }
     }
-    const data = payload?.data ?? payload
-    const ref = String(data?.payment_id ?? data?.id ?? '')
-    const status = String(data?.status ?? payload?.type?.replace(/^payment\./, '') ?? '').toLowerCase()
-    if (!ref || !this.store.payment(ref)) return { ok: true }
-    if (SETTLED.has(status)) this.store.settle(ref)
-    else if (status) this.store.setPaymentStatus(ref, status)
-    return { ok: true }
+    const ev = readWebhook(payload)
+    const row =
+      (ev.checkoutSessionId && this.store.paymentBySession(ev.checkoutSessionId)) ||
+      (typeof ev.metadata.payment_ref === 'string' && this.store.payment(ev.metadata.payment_ref)) ||
+      (ev.paymentId && this.store.payment(ev.paymentId)) ||
+      null
+    if (!row) return { ok: true }
+    if (ev.paymentId) this.store.notePaymentId(row.ref, ev.paymentId, ev.method || null)
+    if (ev.paid) return { ok: true, settled: this.store.settle(row.ref) }
+    const status = ev.status || ev.type.replace(/^payment\./, '')
+    if (status) this.store.setPaymentStatus(row.ref, status)
+    return { ok: true, settled: false }
   }
 }
 

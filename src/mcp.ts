@@ -97,6 +97,7 @@ export function createMcpServer(client = new BuiltIndieClient()): McpServer {
   server.tool('my_products', 'Your launches and claims (needs BUILTINDIE_KEY).', {}, wrap(() => client.me()))
   server.tool('my_invites', 'Your invite link and credits (needs BUILTINDIE_KEY). Each new member who signs up through the link and launches a listing earns one credit: a free Featured week.', {}, wrap(() => client.invites()))
   server.tool('feature_with_credit', 'Spend one invite credit to feature a listing you own for a week (needs BUILTINDIE_KEY).', { slug }, wrap((a: { slug: string }) => client.credit(a.slug)))
+  server.tool('feature_paid', 'Pay to feature a listing you own (needs BUILTINDIE_KEY): returns a CoinPay hosted checkout_url where the buyer picks any coin or PayPal. The receipt goes to email (default: your account email).', { slug, email: z.string().email().optional().describe('Where the receipt goes') }, wrap((a: { slug: string; email?: string }) => client.feature(a.slug, a.email)))
   return server
 }
 

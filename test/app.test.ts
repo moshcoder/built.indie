@@ -13,6 +13,7 @@ import { BuiltIndie, CLAIM_PREFIX, publicTxt } from '../src/service.ts'
 import { initialState, onKey } from '../src/tui.ts'
 import { glyph, icon } from '../src/icons.ts'
 import { cleanTags, inferTags, normalizeTag, tagsFor } from '../src/tags.ts'
+import { signWebhook } from '@profullstack/coinpay-onboard'
 
 const PNG = (w: number, h: number) => {
   const b = new Uint8Array(33)
@@ -73,16 +74,15 @@ function fakeWeb(overrides: Record<string, Response | (() => Response)> = {}) {
   return { fetch: fetchImpl, resolve: async () => ['93.184.216.34'], hits }
 }
 
-function setup(web = fakeWeb(), txt: Record<string, string[][]> = {}) {
+function setup(web = fakeWeb(), txt: Record<string, string[][]> = {}, coinpay: ConstructorParameters<typeof BuiltIndie>[2]['coinpay'] = null) {
   const dir = mkdtempSync(join(tmpdir(), 'builtindie-test-'))
   const store = new Store(join(dir, 'test.db'), 'x'.repeat(32))
   const media = new Media(join(dir, 'media'))
   const service = new BuiltIndie(store, media, {
     origin: 'https://built.indie.pit.world',
-    coinpay: null,
+    coinpay,
     featureUsd: 19,
     featureDays: 7,
-    chains: ['USDC_SOL'],
     screenshots: false,
     fetch: { fetch: web.fetch, resolve: web.resolve },
     claimSecret: 'claim-secret',
@@ -574,7 +574,7 @@ describe('browse and search', () => {
 
 /** The claim token the service would hand this user for acme.test. */
 function setupToken(store: Store, userId: string): string {
-  const svc = new BuiltIndie(store, new Media('/nonexistent'), { origin: '', coinpay: null, featureUsd: 0, featureDays: 0, chains: [], claimSecret: 'claim-secret' })
+  const svc = new BuiltIndie(store, new Media('/nonexistent'), { origin: '', coinpay: null, featureUsd: 0, featureDays: 0, claimSecret: 'claim-secret' })
   return svc.claimToken(store.bySlug('acme')!, store.user(userId)!)
 }
 
@@ -698,5 +698,131 @@ describe('invites', () => {
     expect(store.inviteStats(annId).credits).toBe(1)
     await call('/api/v1/products/acme', { method: 'DELETE', headers: { authorization: 'Bearer admin-key-0123456789' } })
     expect(store.inviteStats(annId)).toMatchObject({ launched: 0, credits: 0 })
+  })
+})
+
+describe('Featured via a CoinPay hosted checkout session', () => {
+  const SECRET = 'whsec_test_0123456789'
+  /** A CoinPay that answers POST /api/checkout/sessions and records what it was sent. */
+  const fakeCoinPay = () => {
+    const sent: { url: string; auth: string | null; body: any }[] = []
+    let n = 0
+    const fetchImpl = (async (input: string | URL, init: RequestInit = {}) => {
+      const url = String(input)
+      sent.push({ url, auth: new Headers(init.headers).get('authorization'), body: init.body ? JSON.parse(String(init.body)) : null })
+      if (url.endsWith('/api/checkout/sessions') && init.method === 'POST') {
+        const id = `cs_test${++n}`
+        return Response.json({ success: true, id, url: `https://coinpayportal.com/checkout/${id}`, status: 'open', methods: ['USDC_POL', 'BTC', 'PAYPAL'], expires_at: null }, { status: 201 })
+      }
+      return new Response('nope', { status: 404 })
+    }) as unknown as typeof fetch
+    return { sent, config: { baseUrl: 'https://coinpayportal.com', apiKey: 'cp_live_test', businessId: 'biz-1', webhookSecret: SECRET, fetch: fetchImpl } }
+  }
+  const launch = async (call: ReturnType<typeof setup>['call']) => {
+    await call('/submit', form({ url: 'acme.test' }))
+  }
+  const hook = (call: ReturnType<typeof setup>['call'], event: unknown, secret = SECRET) => {
+    const raw = JSON.stringify(event)
+    return call('/hooks/coinpay', { method: 'POST', headers: { 'content-type': 'application/json', 'x-coinpay-signature': signWebhook(raw, secret) }, body: raw })
+  }
+  const event = (type: string, data: Record<string, unknown>, id = `evt_${Math.random().toString(36).slice(2)}`) => ({ id, type, business_id: 'biz-1', data: { payment_id: 'pay_1', amount_usd: 19, ...data } })
+
+  test('the web form asks for an email, opens a session with the buyer and the product, and redirects to it', async () => {
+    const cp = fakeCoinPay()
+    const { call, store } = setup(fakeWeb(), {}, cp.config)
+    await launch(call)
+    const page = await (await call('/p/acme')).text()
+    expect(page).toContain('name="email"')
+    expect(page).not.toContain('name="chain"')
+    expect((await call('/p/acme/feature', form({ email: '' }))).status).toBe(400)
+    expect(cp.sent).toHaveLength(0)
+    const res = await call('/p/acme/feature', form({ email: 'Guest@Example.com' }))
+    expect(res.status).toBe(303)
+    expect(res.headers.get('location')).toBe('https://coinpayportal.com/checkout/cs_test1')
+    const { url, auth, body } = cp.sent[0]!
+    expect(url).toBe('https://coinpayportal.com/api/checkout/sessions')
+    expect(auth).toBe('Bearer cp_live_test')
+    const p = store.bySlug('acme')!
+    expect(body).toMatchObject({ amount: 19, currency: 'USD', customer_email: 'guest@example.com', account_id: 'guest@example.com', property: 'built.indie.pit.world', success_url: 'https://built.indie.pit.world/p/acme?featured=1', cancel_url: 'https://built.indie.pit.world/p/acme', expires_in_minutes: 60 })
+    expect(body.metadata).toMatchObject({ product_id: p.id, product: 'feature', days: 7 })
+    expect(body.metadata.payment_ref).toMatch(/^fp_/)
+    expect(body.blockchain).toBeUndefined()
+    expect(body.payment_method).toBeUndefined()
+    expect(store.paymentBySession('cs_test1')).toMatchObject({ ref: body.metadata.payment_ref, productId: p.id, days: 7, status: 'pending' })
+  })
+
+  test('a signed-in buyer is the account; the email is prefilled', async () => {
+    const cp = fakeCoinPay()
+    const { call, mail, store } = setup(fakeWeb(), {}, cp.config)
+    await launch(call)
+    await call('/login', form({ email: 'ann@example.com' }))
+    const token = mail.at(-1)!.text.match(/token=([\w-]+)/)![1]!
+    const cookie = (await call(`/auth/verify?token=${token}`)).headers.get('set-cookie')!.split(';')[0]!
+    expect(await (await call('/p/acme', { headers: { cookie } })).text()).toContain('value="ann@example.com"')
+    await call('/p/acme/feature', { ...form({}), headers: { ...form({}).headers, cookie } })
+    expect(cp.sent[0]!.body).toMatchObject({ customer_email: 'ann@example.com', account_id: store.userByEmail('ann@example.com')!.id })
+  })
+
+  test('webhook: nested payload settles by checkout_session_id once; confirmed then forwarded is one week', async () => {
+    const cp = fakeCoinPay()
+    const { call, store } = setup(fakeWeb(), {}, cp.config)
+    await launch(call)
+    await call('/p/acme/feature', form({ email: 'guest@example.com' }))
+    // Unpaid statuses grant nothing.
+    expect((await hook(call, event('payment.expired', { status: 'expired', checkout_session_id: 'cs_test1' }))).status).toBe(200)
+    expect(store.bySlug('acme')!.featuredUntil).toBeNull()
+    expect(store.paymentBySession('cs_test1')!.status).toBe('expired')
+    // Paid: the session id is on data, metadata is ours.
+    expect((await hook(call, event('payment.confirmed', { status: 'confirmed', checkout_session_id: 'cs_test1', blockchain: 'USDC_POL' }))).status).toBe(200)
+    const until = store.bySlug('acme')!.featuredUntil!
+    expect(until).toBeGreaterThan(Date.now() + 6.9 * 86400_000)
+    expect(until).toBeLessThan(Date.now() + 7.1 * 86400_000)
+    expect((await hook(call, event('payment.forwarded', { status: 'forwarded', checkout_session_id: 'cs_test1' }))).status).toBe(200)
+    expect(store.bySlug('acme')!.featuredUntil).toBe(until)
+    expect(store.paymentBySession('cs_test1')!.status).toBe('paid')
+  })
+
+  test('webhook: a PayPal capture (confirmed, status completed) settles; forwarded alone settles too', async () => {
+    const cp = fakeCoinPay()
+    const { call, store } = setup(fakeWeb(), {}, cp.config)
+    await launch(call)
+    await call('/p/acme/feature', form({ email: 'a@example.com' }))
+    await hook(call, event('payment.confirmed', { status: 'completed', rail: 'paypal', checkout_session_id: 'cs_test1', payment_id: 'pp_1' }))
+    expect(store.paymentBySession('cs_test1')!.status).toBe('paid')
+    const first = store.bySlug('acme')!.featuredUntil!
+    expect(first).toBeGreaterThan(Date.now())
+    // A second purchase, found by our own ref in metadata, paid by forwarded only.
+    await call('/p/acme/feature', form({ email: 'b@example.com' }))
+    const ref = cp.sent[1]!.body.metadata.payment_ref
+    await hook(call, event('payment.forwarded', { status: 'forwarded', payment_id: 'pay_2', metadata: { payment_ref: ref } }))
+    expect(store.payment(ref)!.status).toBe('paid')
+    expect(store.bySlug('acme')!.featuredUntil!).toBeGreaterThan(first + 6.9 * 86400_000)
+  })
+
+  test('webhook: a bad or missing signature is 401 and changes nothing; unknown sessions are acknowledged', async () => {
+    const cp = fakeCoinPay()
+    const { call, store } = setup(fakeWeb(), {}, cp.config)
+    await launch(call)
+    await call('/p/acme/feature', form({ email: 'guest@example.com' }))
+    expect((await hook(call, event('payment.confirmed', { status: 'confirmed', checkout_session_id: 'cs_test1' }), 'wrong-secret')).status).toBe(401)
+    expect((await call('/hooks/coinpay', { method: 'POST', body: '{}' })).status).toBe(401)
+    expect(store.bySlug('acme')!.featuredUntil).toBeNull()
+    expect((await hook(call, event('payment.confirmed', { status: 'confirmed', checkout_session_id: 'cs_other' }))).status).toBe(200)
+    expect(store.bySlug('acme')!.featuredUntil).toBeNull()
+  })
+
+  test('API: the owner (key) gets the session url back; the account is the owner, the email defaults to theirs', async () => {
+    const cp = fakeCoinPay()
+    const { call, store, txt } = setup(fakeWeb(), {}, cp.config)
+    await launch(call)
+    const owner = store.findOrCreateUser('owner@acme.test')
+    txt['acme.test'] = [[`${CLAIM_PREFIX}${setupToken(store, owner.id)}`]]
+    const key = store.newApiKey(owner.id)
+    expect((await (await call('/api/v1/products/acme/claim', json({}, { authorization: `Bearer ${key}` }))).json()).claimed).toBe(true)
+    expect((await call('/api/v1/products/acme/feature', json({}))).status).toBe(401)
+    const body: any = await (await call('/api/v1/products/acme/feature', json({}, { authorization: `Bearer ${key}` }))).json()
+    expect(body).toMatchObject({ checkout_url: 'https://coinpayportal.com/checkout/cs_test1', checkout_session_id: 'cs_test1', methods: ['USDC_POL', 'BTC', 'PAYPAL'], usd: 19, days: 7 })
+    expect(cp.sent[0]!.body).toMatchObject({ customer_email: 'owner@acme.test', account_id: owner.id })
+    expect(store.paymentBySession('cs_test1')).not.toBeNull()
   })
 })
