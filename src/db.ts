@@ -191,6 +191,9 @@ export class Store {
     const has = (table: string, col: string) => (this.db.query(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((c) => c.name === col)
     if (!has('users', 'display_name')) this.db.exec('ALTER TABLE users ADD COLUMN display_name TEXT')
     if (!has('magic_links', 'ref')) this.db.exec('ALTER TABLE magic_links ADD COLUMN ref TEXT')
+    // Hosted checkout sessions (0.5.0): the session is how CoinPay's webhook finds the row.
+    for (const col of ['checkout_session_id', 'customer_email', 'account_id', 'payment_id']) if (!has('payments', col)) this.db.exec(`ALTER TABLE payments ADD COLUMN ${col} TEXT`)
+    this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS payments_session ON payments(checkout_session_id) WHERE checkout_session_id IS NOT NULL')
     this.backfillTags()
   }
 
@@ -552,8 +555,24 @@ export class Store {
     return r ? { id: r.id, name: r.name, profileUrl: r.profile_url, headline: r.headline, avatar: r.avatar, web: r.web, accounts: JSON.parse(r.accounts), createdAt: r.created_at } : null
   }
 
-  addPayment(p: { ref: string; productId: string; amountUsd: number; chain: string; days: number }, now = Date.now()): void {
-    this.db.query('INSERT OR IGNORE INTO payments (ref, product_id, amount_usd, chain, days, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(p.ref, p.productId, p.amountUsd, p.chain, p.days, now, now)
+  addPayment(p: { ref: string; productId: string; amountUsd: number; chain: string; days: number; checkoutSessionId?: string | null; email?: string | null; accountId?: string | null }, now = Date.now()): void {
+    this.db
+      .query('INSERT OR IGNORE INTO payments (ref, product_id, amount_usd, chain, days, checkout_session_id, customer_email, account_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(p.ref, p.productId, p.amountUsd, p.chain, p.days, p.checkoutSessionId ?? null, p.email ?? null, p.accountId ?? null, now, now)
+  }
+
+  paymentBySession(sessionId: string): { ref: string; productId: string; days: number; status: string } | null {
+    const r: any = this.db.query('SELECT ref, product_id, days, status FROM payments WHERE checkout_session_id = ?').get(sessionId)
+    return r ? { ref: r.ref, productId: r.product_id, days: r.days, status: r.status } : null
+  }
+
+  /** CoinPay's payment id and how it was paid (a coin, or paypal), once a webhook names them. */
+  notePaymentId(ref: string, paymentId: string, method: string | null, now = Date.now()): void {
+    this.db.query("UPDATE payments SET payment_id = ?, chain = CASE WHEN ? IS NOT NULL AND ? != '' THEN ? ELSE chain END, updated_at = ? WHERE ref = ?").run(paymentId, method, method, method, now, ref)
+  }
+
+  deletePayment(ref: string): void {
+    this.db.query('DELETE FROM payments WHERE ref = ?').run(ref)
   }
 
   payment(ref: string): { ref: string; productId: string; days: number; status: string } | null {

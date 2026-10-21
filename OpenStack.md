@@ -48,7 +48,7 @@ Launch your indie product with one URL: we read the homepage and the LogicSRC fi
 
 ## Services
 
-- CoinPay: crypto payments for Featured
+- CoinPay: hosted checkout sessions for Featured (any coin or PayPal)
 - Resend: sign-in links
 - crawlproof: analytics and ads
 - Headless Chrome: homepage screenshots, run as nobody

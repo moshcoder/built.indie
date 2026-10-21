@@ -10,7 +10,6 @@ import { categorize, CATEGORY_LABELS, FACETS, isEmpty, queryString, SORTS, toggl
 import { pitFooter } from './pit-footer.js'
 import { RING_PLACEHOLDER } from './ring.js'
 import { ringFooter, ringFooterOptions, setRingFooterOptions } from './ring-footer.js'
-import { CHAIN_LABELS } from './service.js'
 import { icon, SOCIAL_ICONS } from './icons.js'
 
 export const REPO = 'https://github.com/moshcoder/built.indie'
@@ -362,7 +361,7 @@ function pricingHtml(p: Product): string {
 
 const SOCIAL_LABELS: Record<string, string> = { x: 'X', github: 'GitHub', linkedin: 'LinkedIn', discord: 'Discord', youtube: 'YouTube', bluesky: 'Bluesky', instagram: 'Instagram', tiktok: 'TikTok', reddit: 'Reddit', telegram: 'Telegram', producthunt: 'Product Hunt', appstore: 'App Store', playstore: 'Google Play', chrome: 'Chrome Web Store' }
 
-export function productPage(ctx: Ctx, d: { product: Product; award: { day: string; rank: number } | null; maker: Maker | null; featuredOk?: boolean; featuredCredit?: boolean; launched?: boolean; canEdit?: boolean; credits?: number; chains: string[]; featureUsd: number; featureDays: number; payments: boolean }): string {
+export function productPage(ctx: Ctx, d: { product: Product; award: { day: string; rank: number } | null; maker: Maker | null; featuredOk?: boolean; featuredCredit?: boolean; launched?: boolean; canEdit?: boolean; credits?: number; buyerEmail?: string; featureUsd: number; featureDays: number; payments: boolean }): string {
   const p = d.product
   const shots = [p.screenshot, ...p.images, p.ogImage].filter((f): f is string => Boolean(f))
   const rel = p.verifiedAt ? 'noopener' : 'noopener nofollow ugc'
@@ -416,7 +415,7 @@ ${live ? `<h2 class="section-h">Share it</h2>${share(ctx.origin, p)}
 ${d.payments || d.canEdit ? `<details class="card" id="feature"${d.canEdit && d.credits ? ' open' : ''}><summary>Feature it: ${esc(`$${d.featureUsd}`)} for ${d.featureDays} days, or free with an invite</summary>
   <p class="muted">Pinned above today’s board on the homepage for ${d.featureDays} days.</p>
   ${d.canEdit && d.credits ? `<form method="post" action="/p/${esc(p.slug)}/credit" class="row"><button class="btn">${icon('star')} Use a free invite credit</button><span class="muted small">${d.credits} left</span></form>` : `<p class="muted small">Free: ${esc(inviteOffer(d.featureDays, d.featureUsd))} <a href="/invite">Get your invite link</a>.</p>`}
-  ${d.payments ? `<form method="post" action="/p/${esc(p.slug)}/feature" class="row"><label class="sr" for="chain">Pay with</label><select id="chain" name="chain">${d.chains.map((c) => `<option value="${esc(c)}">${esc(CHAIN_LABELS[c] ?? c)}</option>`).join('')}</select><button class="btn${d.canEdit && d.credits ? ' ghost' : ''}">Pay $${esc(d.featureUsd)} in crypto</button></form>` : ''}
+  ${d.payments ? `<form method="post" action="/p/${esc(p.slug)}/feature" class="row"><label class="sr" for="feature-email">Your email</label><input id="feature-email" name="email" type="email" required autocomplete="email" placeholder="you@example.com" value="${esc(d.buyerEmail ?? '')}"><button class="btn${d.canEdit && d.credits ? ' ghost' : ''}">Pay $${esc(d.featureUsd)}</button></form><p class="muted small">You pick any coin or PayPal on CoinPay's checkout page. The receipt goes to your email.</p>` : ''}
 </details>` : ''}` : ''}`,
   })
 }
@@ -660,6 +659,7 @@ curl -X POST ${o}/api/v1/products/&lt;slug&gt;/refetch -H 'authorization: Bearer
 curl -X POST ${o}/api/v1/products/&lt;slug&gt;/publish -H 'authorization: Bearer bi_…'
 curl ${o}/api/v1/invites -H 'authorization: Bearer bi_…'                 # your invite link and credits
 curl -X POST ${o}/api/v1/products/&lt;slug&gt;/credit -H 'authorization: Bearer bi_…'   # spend one: Featured for a week
+curl -X POST ${o}/api/v1/products/&lt;slug&gt;/feature -H 'authorization: Bearer bi_…' -d '{"email":"you@…"}'   # pay: a CoinPay checkout_url (any coin or PayPal)
 curl ${o}/leaderboard/invites.json?period=week                       # top inviters (all|week|month)</pre>
 <p class="muted small">Claiming, the easy way: the badge. <code>GET …/claim</code> answers a <code>badge</code> snippet next to the DNS <code>record</code>; put it on your homepage (<code>&lt;img src="${o}/images.svg?id=&lt;id&gt;"&gt;</code>, the id is yours for that listing) and the <code>POST</code> answers <code>{"claimed": true, "method": "badge"}</code>. It also earns the followed link and the ✓ in the same step.</p>
 <p class="muted small">OpenSite (logicsrc.com/docs/opensite): <code>GET /api/v1/sites?url=…</code>, <code>POST /api/v1/sites</code>, and every product at <code>/p/&lt;slug&gt;/opensite.json</code>. OpenProfile: <code>/p/&lt;slug&gt;/openprofile.md</code>, <code>/makers/&lt;id&gt;/openprofile.md</code>.</p></div>

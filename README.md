@@ -16,7 +16,7 @@ Then it goes on today's board. People upvote (one per visitor). The board resets
 
 **Free to launch, no account.** Anyone can launch any site. To edit a listing, sign in (an emailed link) and **claim** it. The easy way is the badge: put `<img src="https://built.indie.pit.world/images.svg?id=<id>">` on the homepage, where the id is unique to that listing and your account (the claim page, `claim.md`, the API and the CLI hand you the full snippet). Finding it claims the listing for you and earns the followed link and the ✓ in one step. Or add a DNS TXT record, `_built-indie.<domain>` → `built-indie-verify=<token>`. (Badges placed earlier as `/badge/<slug>.svg?claim=<token>` still claim.) A signed-in submitter can edit until the owner claims it.
 
-Viral bits: a live badge with the upvote count (`/badge/<slug>.svg`) that turns a link back into a followed link and a ✓ once we see it on the homepage, share buttons, an OG card per product, RSS, and an optional crypto-paid **Featured** slot (CoinPay).
+Viral bits: a live badge with the upvote count (`/badge/<slug>.svg`) that turns a link back into a followed link and a ✓ once we see it on the homepage, share buttons, an OG card per product, RSS, and an optional paid **Featured** slot: CoinPay's hosted checkout, where the buyer picks any coin or PayPal.
 
 **Tags.** Every listing is tagged with what its homepage declares (opensite.json `tags`/`keywords`, `<meta name="keywords">`, `article:tag`, JSON-LD `keywords`, `applicationCategory` and `genre`, manifest `categories`). A site that declares none gets up to four topics read from its own name, tagline and description (`src/tags.ts`), and listings launched before that are backfilled on start. Owners edit them on the listing. Browse at `/tags` and `/t/<tag>`; `GET /api/v1/tags`, `GET /api/v1/products?tag=<tag>`, `builtindie tags [tag]`, MCP `list_tags` and `tagged`.
 
@@ -44,6 +44,7 @@ BUILTINDIE_KEY=bi_… builtindie claim linear   # prints your badge and the TXT 
 BUILTINDIE_KEY=bi_… builtindie edit linear --tagline "…"
 BUILTINDIE_KEY=bi_… builtindie invite          # your invite link and free Featured credits
 BUILTINDIE_KEY=bi_… builtindie credit linear   # spend one: Featured for a week
+BUILTINDIE_KEY=bi_… builtindie feature linear  # or pay: a CoinPay checkout link (any coin or PayPal)
 
 claude mcp add builtindie -- bunx @profullstack/builtindie mcp
 ```
@@ -65,7 +66,7 @@ bun test
 | `BUILTINDIE_DATA` | where the database and pictures live (default ~/.local/share/built-indie) |
 | `BUILTINDIE_ADMIN_KEY` | bearer that may take a listing down |
 | `RESEND_API_KEY`, `MAIL_FROM` | sign-in mail; without them the link is logged |
-| `COINPAY_API_KEY`, `COINPAY_BUSINESS_ID`, `COINPAY_WEBHOOK_SECRET` | Featured payments |
+| `COINPAY_API_KEY`, `COINPAY_BUSINESS_ID`, `COINPAY_WEBHOOK_SECRET` | Featured payments: a CoinPay hosted checkout session per purchase, settled by the signed webhook at `/hooks/coinpay` |
 | `FEATURE_USD`, `FEATURE_DAYS` | price and length of Featured (19, 7) |
 | `BUILTINDIE_CHROME` | Chrome path, or `off`; `BUILTINDIE_SCREENSHOTS=off` skips screenshots |
 | `CRAWLPROOF_SITE`, `CRAWLPROOF_AD_SLOT` | analytics and ads; `off` turns either off |

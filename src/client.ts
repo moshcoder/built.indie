@@ -136,6 +136,11 @@ export class BuiltIndieClient {
     return this.call('POST', `/api/v1/products/${encodeURIComponent(slug)}/credit`, {}, this.needKey())
   }
 
+  /** Pay to feature a listing you own: opens a CoinPay checkout session (any coin or PayPal); send the buyer to checkout_url. */
+  feature(slug: string, email?: string): Promise<{ checkout_url: string; checkout_session_id: string; methods: string[]; payment: string; usd: number; days: number }> {
+    return this.call('POST', `/api/v1/products/${encodeURIComponent(slug)}/feature`, email ? { email } : {}, this.needKey())
+  }
+
   edit(slug: string, patch: Record<string, unknown>, key?: string): Promise<ApiProduct> {
     return this.call('PATCH', `/api/v1/products/${encodeURIComponent(slug)}`, patch, this.needKey(key))
   }
