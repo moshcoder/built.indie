@@ -34,8 +34,8 @@ const TRACKER = TRACK_SITE === 'off' ? '' : `<script data-site="${TRACK_SITE}" s
  * CRAWLPROOF_AD_SLOT overrides the slot; 'off' turns ads off.
  */
 export const AD_SLOT = process.env.CRAWLPROOF_AD_SLOT ?? '7371269e-a3c9-4a84-8b22-00d5045068e7'
-export const adUnit = (format: 'banner_300x250' | 'banner_728x90' | 'text_link') =>
-  AD_SLOT === 'off' ? '' : `<div class="ad-unit ad-${format}"><iframe src="https://crawlproof.com/api/ads/frame?slot=${encodeURIComponent(AD_SLOT)}&amp;format=${format}" title="Advertisement" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation" scrolling="no"></iframe></div>`
+export const adUnit = () =>
+  AD_SLOT === 'off' ? '' : `<div class="ad-unit"><iframe src="https://crawlproof.com/api/ads/frame?slot=${encodeURIComponent(AD_SLOT)}&amp;format=text_link" title="Advertisement" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation" scrolling="no"></iframe></div>`
 
 const asset = (name: string) => {
   const body = readFileSync(new URL(`../public/${name}`, import.meta.url))
@@ -108,7 +108,7 @@ ${RING_PLACEHOLDER}
   </nav>
 </header>
 <main${o.wide ? ' class="wide"' : ''}>
-${o.ads ? adUnit('text_link') : ''}
+${o.ads ? adUnit() : ''}
 ${o.body}
 </main>
 ${ringFooter()}
@@ -193,14 +193,12 @@ export function homePage(ctx: Ctx, d: { today: Product[]; featured: Product[]; y
     title: 'built.indie: launch your indie product with one URL',
     description: 'Paste a URL. We fetch everything: logo, screenshots, videos, llms.txt. Get upvotes and a badge. Free.',
     path: '/',
-    ads: true,
     body: `<section class="hero">
   <h1>Built it? Launch it.</h1>
   <p class="lede">Paste one URL. We pull your logo, screenshots, videos and story from your homepage. People upvote. You get a badge.</p>
   ${submitForm(true)}
   <p class="muted small">${d.stats.products} launched · ${d.stats.votes} upvotes · free, no sign-up to launch</p>
 </section>
-${adUnit('banner_728x90')}
 ${invitePromo(ctx, d)}
 ${d.featured.length ? `<h2 class="section-h">Featured</h2>${board(ctx, d.featured, false)}` : ''}
 <h2 class="section-h">Launching today <span class="muted small">resets at 00:00 UTC</span></h2>
@@ -407,8 +405,7 @@ ${p.videos.length ? `<div class="videos">${p.videos.map((v) => (v.embed ? `<div 
   ${p.makerName || d.maker ? `<p class="maker">Made by ${d.maker ? `<a href="/makers/${esc(d.maker.id)}">${esc(p.makerName || d.maker.name)}</a>${p.makerVerified ? ' <span class="tick" title="Their OpenProfile names this product">✓</span>' : ''}` : esc(p.makerName)}</p>` : ''}
   <p class="muted small">Launched ${p.launchedAt ? new Date(p.launchedAt).toISOString().slice(0, 10) : 'soon'} · ${p.votes} upvote${p.votes === 1 ? '' : 's'} · <a href="/p/${esc(p.slug)}/opensite.json">OpenSite record</a> · <a href="/p/${esc(p.slug)}/openprofile.md">OpenProfile.md</a></p>
 </div>
-${live ? `${adUnit('banner_300x250')}
-<h2 class="section-h">Share it</h2>${share(ctx.origin, p)}
+${live ? `<h2 class="section-h">Share it</h2>${share(ctx.origin, p)}
 <details class="card" id="badge"${p.verifiedAt || !d.canEdit ? '' : ' open'}>
   <summary>Add the badge to your site</summary>
   <p class="muted">Put this on your homepage. It shows your live upvote count, and once we see it your link here becomes a followed link and you get the ✓.</p>
