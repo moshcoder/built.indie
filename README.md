@@ -22,6 +22,13 @@ Viral bits: a live badge with the upvote count (`/badge/<slug>.svg`) that turns 
 
 **Invite program.** Every account has an invite link, `/i/<code>` (on `/invite`, `/me`, `builtindie invite`, `GET /api/v1/invites`, MCP `my_invites`). When a new member who signed up through it gets their first listing live, the inviter earns a credit: a free **Featured** week (the same slot that costs $19 in crypto). Spend it on any listing you own from `/invite`, the listing's page, `builtindie credit <slug>`, `POST /api/v1/products/<slug>/credit` or MCP `feature_with_credit`. Once per new member, never yourself; the code rides in the magic link, so it counts when the mail opens in another browser; an admin takedown of the listing takes back an unspent credit. The inviter gets an email when a credit lands.
 
+**Credit codes and invite codes (0.7.0).** A credit code (`CR-XXXX-XXXX-XXXX-XXXX`, [@profullstack/redeem-credits](https://www.npmjs.com/package/@profullstack/redeem-credits), unit `featured_days`) adds Featured days to a member's balance: "Have a code?" on `/me`, `POST /api/v1/redeem`, `builtindie redeem <code>`, MCP `redeem_code`. The days go on any live listing you own through the same `featured_until` a paid week extends (`/me`, the listing's Feature card, `POST /api/v1/products/<slug>/feature-days {"days":n}`, `builtindie feature-days <slug> <n>`, MCP `feature_with_days`). Every member also has **3 single-use invite codes** ([@profullstack/affiliates](https://www.npmjs.com/package/@profullstack/affiliates)) on `/invite#codes`, `POST /api/v1/invites`, `builtindie invite-code`, MCP `create_invite`: someone new who signs up through `/i/INV-…` gives both people **2 Featured days**, and the sign-up counts once in the invite program above (same `invites` row). `?ref=<your invite code>` on any page is your invite link too (the same `bi_ref` cookie, first touch). Mint codes on the server:
+
+```sh
+cd /opt/built.indie && /root/.bun/bin/bun $(readlink -f node_modules/.bin/redeem-credits) mint \
+  --db /root/.local/share/built-indie/built-indie.db --unit featured_days --amount 7 --label "for Ada"
+```
+
 **Leaderboard.** `/leaderboard` ranks the top inviters (week, month, all time) with badges, on [@profullstack/leaderboard](https://github.com/profullstack/leaderboard). It projects the `invites` table, so there is no second ledger; badges live in the `lb_` tables of the same database. The package also serves `/leaderboard.json`, `/leaderboard/invites.json|.xml`, a share card per member at `/leaderboard/u/<id>`, and a widget any site can embed (`/leaderboard/embed.js`). Members appear by the name they set on `/invite`, else as "Maker of <their best listing>"; never by email.
 
 **Browse and search.** A search box in the header of every page (press `/`; it suggests launches as you type) opens `/search`: a facet rail in the style of [r4ck.dev](https://r4ck.dev) with counts for category, tags, when it launched, what it has (✓ verified, claimed, video, llms.txt, OpenSite/OpenProfile/OpenStack/OpenSaaS), what it is built with (OpenStack.md) and maker, plus sort and active-filter chips. Values in one facet are OR'd, facets are AND'd, and each facet counts as if only it changed. Tags are what the page or the maker said; categories are a fixed set of twenty-one read from a listing's tags, name, tagline and description (`src/browse.ts`), so every launch is filed even with no tags. `/c/<category>` and `/t/<tag>` are indexable pages for one filter; the same query is `GET /api/v1/search` (products + facets), `GET /api/v1/categories`, `builtindie search … --category ai --has verified --facets`, and the MCP `search` / `list_categories` tools.
@@ -44,6 +51,8 @@ BUILTINDIE_KEY=bi_… builtindie claim linear   # prints your badge and the TXT 
 BUILTINDIE_KEY=bi_… builtindie edit linear --tagline "…"
 BUILTINDIE_KEY=bi_… builtindie invite          # your invite link and free Featured credits
 BUILTINDIE_KEY=bi_… builtindie credit linear   # spend one: Featured for a week
+BUILTINDIE_KEY=bi_… builtindie redeem CR-…      # a credit code: Featured days
+BUILTINDIE_KEY=bi_… builtindie invite-code     # one of your 3 single-use invites
 BUILTINDIE_KEY=bi_… builtindie feature linear  # or pay: a CoinPay checkout link (any coin or PayPal)
 
 claude mcp add builtindie -- bunx @profullstack/builtindie mcp

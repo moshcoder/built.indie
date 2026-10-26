@@ -38,7 +38,7 @@ export type ApiProduct = {
   award?: { day: string; rank: number } | null
 }
 
-export type Invites = { link: string; code: string; invited: number; launched: number; credits: number; karma_credits?: number; used: number; feature_days: number }
+export type Invites = { link: string; code: string; invited: number; launched: number; credits: number; karma_credits?: number; used: number; feature_days: number; invite_codes?: { quota: { total: number; used: number; left: number }; bonus_days: number; invites: { id: string; note: string; created_at: string; expires_at: string | null; used: boolean; used_at: string | null }[] } }
 
 export type KarmaInfo = { total: number; week: number; per_credit: number; next_credit_in: number; credits: { earned: number; used: number }; events: { action: string; label: string; ref: string; points: number; at: string }[]; how_to_earn: { action: string; points: number; rule: string }[]; leaderboard: string }
 export type BoardRows = { board: string; period: string; total: number; rows: { rank: number | null; id: string; name: string; value: number; badges: { emoji: string; label: string }[]; url: string }[]; web: string }
@@ -141,6 +141,21 @@ export class BuiltIndieClient {
   /** Spend one invite credit to feature a listing you own. */
   credit(slug: string): Promise<{ featured_until: string; credits: number }> {
     return this.call('POST', `/api/v1/products/${encodeURIComponent(slug)}/credit`, {}, this.needKey())
+  }
+
+  /** Redeem a credit code: Featured days added to your balance. */
+  redeem(code: string): Promise<{ ok: boolean; message: string; featured_days: number }> {
+    return this.call('POST', '/api/v1/redeem', { code }, this.needKey())
+  }
+
+  /** Make one of your scarce single-use invite codes; the link is shown once. */
+  inviteCode(note = ''): Promise<{ link: string; code: string; expires_at: string | null; left: number; bonus_days: number }> {
+    return this.call('POST', '/api/v1/invites', { note }, this.needKey())
+  }
+
+  /** Spend Featured days from your balance on a listing you own. */
+  featureDays(slug: string, days: number): Promise<{ featured_until: string; featured_days: number }> {
+    return this.call('POST', `/api/v1/products/${encodeURIComponent(slug)}/feature-days`, { days }, this.needKey())
   }
 
   /** Pay to feature a listing you own: opens a CoinPay checkout session (any coin or PayPal); send the buyer to checkout_url. */

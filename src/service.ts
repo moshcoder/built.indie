@@ -10,6 +10,9 @@
  *   verify   the maker put our badge on their site: a followed link back
  *   feature  pay on CoinPay's hosted checkout (any coin or PayPal) to sit on top for a week
  *   vote, comment, review, share   what members do on a listing; each pays karma (karma.ts)
+ *   redeem   a credit code (@profullstack/redeem-credits) adds Featured days to a member's balance
+ *   invites  3 single-use invite codes each (@profullstack/affiliates); a new member who
+ *            joins through one gives both of them INVITE_BONUS_DAYS Featured days
  *
  * Products are described in the LogicSRC open specs: each one is an OpenSite
  * record (logicsrc.com/docs/opensite) and an OpenProfile.md with Kind
@@ -26,6 +29,23 @@ import { Karma, SHARE_NETWORKS } from './karma.js'
 import { cleanTags } from './tags.js'
 import { validEmail } from './auth.js'
 import { CoinPay, CoinPayError, readWebhook, verifyWebhook } from '@profullstack/coinpay-onboard'
+import { Credits, sqliteStore as creditStore } from '@profullstack/redeem-credits'
+import { Affiliates, sqliteStore as affiliateStore } from '@profullstack/affiliates'
+
+/** The unit a credit code grants: days a listing sits in the Featured slot. */
+export const FEATURED_DAYS = 'featured_days'
+/** Single-use invite codes each member can hand out. Scarce on purpose: an invite should mean something. */
+export const INVITES_PER_PERSON = 3
+/** Featured days both people get when an invite code is used by someone new. */
+export const INVITE_BONUS_DAYS = 2
+/** What a refused credit code means, in words. */
+const REDEEM_REASONS: Record<string, string> = {
+  invalid: 'That code is not valid.',
+  expired: 'That code has expired.',
+  used_up: 'That code has been used.',
+  already_redeemed: 'You already redeemed that code.',
+  revoked: 'That code was withdrawn.',
+}
 
 export class InputError extends Error {
   constructor(message: string, readonly field?: string) {
@@ -80,8 +100,57 @@ const list = (v: string[] | string | undefined) => (Array.isArray(v) ? v : Strin
 
 export class BuiltIndie {
   readonly karma: Karma
+  /** Redeemable credit codes: Featured days, in the app's own database (credit_* tables). */
+  readonly credits: Credits
+  /** Scarce invite codes (aff_* tables). The open per-member link stays the app's own invite program. */
+  readonly affiliates: Affiliates
   constructor(readonly store: Store, readonly media: Media, readonly config: Config) {
     this.karma = new Karma(store, config.karmaPerCredit ?? 500)
+    this.credits = new Credits(creditStore(store.db as never))
+    this.affiliates = new Affiliates(affiliateStore(store.db as never), { defaultQuota: INVITES_PER_PERSON })
+  }
+
+  /** Featured days this member holds (from credit codes and invite bonuses), not yet spent on a listing. */
+  featuredDays(user: Pick<User, 'id'>): Promise<number> {
+    return this.credits.balance(user.id, FEATURED_DAYS)
+  }
+
+  /** Redeem a credit code for the signed-in member. Returns what it added, in words; a refused code throws. */
+  async redeem(user: Pick<User, 'id'>, code: string): Promise<{ message: string; days: number }> {
+    if (!code.trim()) throw new InputError('Enter a code.', 'code')
+    const r = await this.credits.redeem(code, user.id)
+    if (!r.ok) throw new InputError(REDEEM_REASONS[r.reason] ?? 'That code did not work.', 'code')
+    const g = r.grant
+    const what = g.unit === FEATURED_DAYS ? `${g.amount} Featured day${g.amount === 1 ? '' : 's'}` : `${g.amount} ${g.unit}`
+    const message = g.every === 'month' ? `Added ${what} every month${g.months ? ` for ${g.months} months` : ''}.` : `Added ${what}.`
+    return { message: `${message} Use them on any live listing you own.`, days: await this.featuredDays(user) }
+  }
+
+  /** Spend Featured days from the balance on a live listing: the same featured_until a paid week extends. */
+  async spendFeaturedDays(p: Product, user: User, days: number): Promise<Product> {
+    if (p.status !== 'live') throw new InputError('Only a live listing can be featured.')
+    if (!this.store.canEdit(p, user)) throw new InputError('You can only feature a listing you submitted or own.')
+    const want = Math.floor(Number(days))
+    if (!Number.isFinite(want) || want < 1) throw new InputError('Pick at least one day.', 'days')
+    const r = await this.credits.spend(user.id, FEATURED_DAYS, want, `featured ${p.slug}`)
+    if (!r.ok) throw new InputError(r.balance ? `You have ${r.balance} Featured day${r.balance === 1 ? '' : 's'} left.` : 'You have no Featured days. Redeem a code or use an invite.', 'days')
+    this.store.extendFeatured(p.id, want)
+    return this.store.product(p.id)!
+  }
+
+  /**
+   * Someone new signed up through a scarce invite code: the code is spent, both get
+   * INVITE_BONUS_DAYS Featured days, and the invite counts in the invite program
+   * (the same invites row an invite link makes, so a sign-up is never counted twice).
+   */
+  async acceptInvite(code: string, user: User): Promise<{ ok: boolean; reason?: string; inviterId?: string }> {
+    const r = await this.affiliates.redeemInvite(code, user.id)
+    if (!r.ok) return { ok: false, reason: r.reason }
+    const bonus = { unit: FEATURED_DAYS, amount: INVITE_BONUS_DAYS } as const
+    await this.credits.grant(user.id, bonus, `invited by ${r.inviterId}`)
+    await this.credits.grant(r.inviterId, bonus, `invited ${user.id}`)
+    this.store.recordInvite(user.id, this.store.inviteCode(r.inviterId))
+    return { ok: true, inviterId: r.inviterId }
   }
 
   /** A product page's public address. */

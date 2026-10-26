@@ -481,7 +481,7 @@ export class Store {
         .run(productId, now, userId)
       // No invite credit left: a karma credit is the same free week.
       if (!r.changes && !this.db.query('UPDATE karma_credits SET redeemed_product = ?, redeemed_at = ? WHERE rowid = (SELECT rowid FROM karma_credits WHERE user_id = ? AND redeemed_at IS NULL ORDER BY milestone LIMIT 1)').run(productId, now, userId).changes) return false
-      this.db.query('UPDATE products SET featured_until = MAX(COALESCE(featured_until, 0), ?) + ? WHERE id = ?').run(now, days * 86400_000, productId)
+      this.extendFeatured(productId, days, now)
       return true
     })()
   }
@@ -790,11 +790,16 @@ export class Store {
     return r ? { ref: r.ref, productId: r.product_id, days: r.days, status: r.status } : null
   }
 
+  /** The one way a listing gets Featured time: paid weeks, invite and karma credits, and redeemed Featured days. */
+  extendFeatured(productId: string, days: number, now = Date.now()): void {
+    this.db.query('UPDATE products SET featured_until = MAX(COALESCE(featured_until, 0), ?) + ? WHERE id = ?').run(now, days * 86400_000, productId)
+  }
+
   /** Mark a payment settled and extend the product's featured time, exactly once per payment. */
   settle(ref: string, now = Date.now()): boolean {
     const r: any = this.db.query("UPDATE payments SET status = 'paid', updated_at = ? WHERE ref = ? AND status != 'paid' RETURNING product_id, days").get(now, ref)
     if (!r) return false
-    this.db.query('UPDATE products SET featured_until = MAX(COALESCE(featured_until, 0), ?) + ? WHERE id = ?').run(now, r.days * 86400_000, r.product_id)
+    this.extendFeatured(r.product_id, r.days, now)
     return true
   }
 
