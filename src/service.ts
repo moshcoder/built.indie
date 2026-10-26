@@ -123,7 +123,7 @@ export class BuiltIndie {
     const g = r.grant
     const what = g.unit === FEATURED_DAYS ? `${g.amount} Featured day${g.amount === 1 ? '' : 's'}` : `${g.amount} ${g.unit}`
     const message = g.every === 'month' ? `Added ${what} every month${g.months ? ` for ${g.months} months` : ''}.` : `Added ${what}.`
-    return { message: `${message} Use them on any live listing you own.`, days: await this.featuredDays(user) }
+    return { message: `${message} Use ${g.amount === 1 ? 'it' : 'them'} on any live listing you own.`, days: await this.featuredDays(user) }
   }
 
   /** Spend Featured days from the balance on a live listing: the same featured_until a paid week extends. */
