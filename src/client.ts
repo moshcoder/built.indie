@@ -16,6 +16,8 @@ export type ApiProduct = {
   domain: string
   status: string
   votes: number
+  reviews?: number
+  rating?: number | null
   tags: string[]
   logo: string | null
   card_image: string | null
@@ -36,7 +38,12 @@ export type ApiProduct = {
   award?: { day: string; rank: number } | null
 }
 
-export type Invites = { link: string; code: string; invited: number; launched: number; credits: number; used: number; feature_days: number }
+export type Invites = { link: string; code: string; invited: number; launched: number; credits: number; karma_credits?: number; used: number; feature_days: number }
+
+export type KarmaInfo = { total: number; week: number; per_credit: number; next_credit_in: number; credits: { earned: number; used: number }; events: { action: string; label: string; ref: string; points: number; at: string }[]; how_to_earn: { action: string; points: number; rule: string }[]; leaderboard: string }
+export type BoardRows = { board: string; period: string; total: number; rows: { rank: number | null; id: string; name: string; value: number; badges: { emoji: string; label: string }[]; url: string }[]; web: string }
+export type ApiComment = { id: string; parent: string | null; body: string | null; deleted: boolean; author: string | null; karma: number; maker: boolean; at: string; url: string; mine?: boolean }
+export type ApiReview = { rating: number; body: string; author: string; karma: number; at: string }
 
 export type Launched = { product: ApiProduct; claim_url?: string; existing?: boolean }
 export type ClaimRecord = { type: string; name: string; value: string }
@@ -147,6 +154,35 @@ export class BuiltIndieClient {
 
   act(slug: string, action: 'publish' | 'refetch', key?: string): Promise<ApiProduct> {
     return this.call('POST', `/api/v1/products/${encodeURIComponent(slug)}/${action}`, {}, this.needKey(key))
+  }
+
+  /** Your karma: total, this week, history, and how far to the next free Featured week. */
+  karma(): Promise<KarmaInfo> {
+    return this.call('GET', '/api/v1/karma', undefined, this.needKey())
+  }
+
+  leaderboard(board = 'karma', period = 'week', limit = 25): Promise<BoardRows> {
+    return this.call('GET', `/api/v1/leaderboard?board=${encodeURIComponent(board)}&period=${encodeURIComponent(period)}&limit=${limit}`)
+  }
+
+  comments(slug: string): Promise<{ slug: string; comments: ApiComment[] }> {
+    return this.call('GET', `/api/v1/products/${encodeURIComponent(slug)}/comments`)
+  }
+
+  comment(slug: string, body: string, parent?: string): Promise<{ comment: ApiComment; karma: number }> {
+    return this.call('POST', `/api/v1/products/${encodeURIComponent(slug)}/comments`, { body, ...(parent ? { parent } : {}) }, this.needKey())
+  }
+
+  deleteComment(id: string): Promise<{ deleted: boolean }> {
+    return this.call('DELETE', `/api/v1/comments/${encodeURIComponent(id)}`, undefined, this.needKey())
+  }
+
+  reviews(slug: string): Promise<{ slug: string; rating: number | null; count: number; reviews: ApiReview[] }> {
+    return this.call('GET', `/api/v1/products/${encodeURIComponent(slug)}/reviews`)
+  }
+
+  review(slug: string, rating: number, body: string): Promise<{ review: { rating: number; body: string }; product: { rating: number | null; count: number }; karma: number }> {
+    return this.call('POST', `/api/v1/products/${encodeURIComponent(slug)}/reviews`, { rating, body }, this.needKey())
   }
 
   verify(slug: string): Promise<{ verified: boolean }> {

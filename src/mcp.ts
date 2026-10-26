@@ -3,7 +3,7 @@
  *
  *   claude mcp add builtindie -- bunx @profullstack/builtindie mcp
  *
- * Reading, launching and voting need nothing. Claiming and editing need
+ * Reading, launching and voting need nothing. Claiming, editing, commenting, reviewing and karma need
  * BUILTINDIE_KEY: an account API key from built.indie.pit.world/me.
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
@@ -98,6 +98,27 @@ export function createMcpServer(client = new BuiltIndieClient()): McpServer {
   server.tool('my_invites', 'Your invite link and credits (needs BUILTINDIE_KEY). Each new member who signs up through the link and launches a listing earns one credit: a free Featured week.', {}, wrap(() => client.invites()))
   server.tool('feature_with_credit', 'Spend one invite credit to feature a listing you own for a week (needs BUILTINDIE_KEY).', { slug }, wrap((a: { slug: string }) => client.credit(a.slug)))
   server.tool('feature_paid', 'Pay to feature a listing you own (needs BUILTINDIE_KEY): returns a CoinPay hosted checkout_url where the buyer picks any coin or PayPal. The receipt goes to email (default: your account email).', { slug, email: z.string().email().optional().describe('Where the receipt goes') }, wrap((a: { slug: string; email?: string }) => client.feature(a.slug, a.email)))
+  server.tool('my_karma', 'Your karma on built.indie (needs BUILTINDIE_KEY): total, this week, recent history, how many karma to the next free Featured week, and the how-to-earn table.', {}, wrap(() => client.karma()))
+  server.tool(
+    'leaderboard',
+    'The built.indie leaderboard: top karma (default) or top inviters, for a week, a month or all time.',
+    { board: z.enum(['karma', 'invites']).default('karma'), period: z.enum(['week', 'month', 'all']).default('week'), limit: z.number().int().min(1).max(100).default(10) },
+    wrap((a: { board: string; period: string; limit: number }) => client.leaderboard(a.board, a.period, a.limit)),
+  )
+  server.tool('list_comments', 'The comments on a launch, oldest first, with each author\'s karma; replies carry their parent id.', { slug }, wrap((a: { slug: string }) => client.comments(a.slug)))
+  server.tool(
+    'comment',
+    'Comment on a launch (needs BUILTINDIE_KEY). 10+ characters earns 2 karma (10 paid a day; not on your own listing). parent replies to a comment.',
+    { slug, body: z.string().min(2).max(2000), parent: z.string().optional().describe('A comment id to reply to') },
+    wrap((a: { slug: string; body: string; parent?: string }) => client.comment(a.slug, a.body, a.parent)),
+  )
+  server.tool('list_reviews', 'The reviews of a launch with its average rating.', { slug }, wrap((a: { slug: string }) => client.reviews(a.slug)))
+  server.tool(
+    'review',
+    'Review a launch (needs BUILTINDIE_KEY): 1-5 stars and text; one per member per launch, posting again updates it. 30+ characters earns 5 karma, once; not on your own listing.',
+    { slug, rating: z.number().int().min(1).max(5), body: z.string().max(2000).default('') },
+    wrap((a: { slug: string; rating: number; body: string }) => client.review(a.slug, a.rating, a.body)),
+  )
   return server
 }
 

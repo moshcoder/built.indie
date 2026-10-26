@@ -47,6 +47,9 @@ export type Product = {
   submitterUser: string | null
   status: Status
   votes: number
+  /** Reviews: how many, and the mean of their 1-5 stars (null with none). */
+  reviews: number
+  rating: number | null
   verifiedAt: number | null
   featuredUntil: number | null
   launchedAt: number | null
@@ -57,7 +60,16 @@ export type Product = {
 export type User = { id: string; email: string; createdAt: number; displayName: string | null }
 
 /** Where a member stands in the invite program. A credit is one Featured week, free. */
-export type InviteStats = { code: string; invited: number; launched: number; credits: number; used: number }
+export type InviteStats = { code: string; invited: number; launched: number; credits: number; used: number; /** Of `credits`, how many came from karma (one per KARMA_PER_CREDIT). */ karmaCredits: number }
+
+/** One row of the karma ledger. Points may be negative: a reversal is a new row, never an edit. */
+export type KarmaEvent = { id: string; userId: string; action: string; ref: string; points: number; createdAt: number }
+
+/** A comment on a listing. Threaded one level: a reply's parent is always a top-level comment. */
+export type Comment = { id: string; productId: string; userId: string; parentId: string | null; body: string; createdAt: number; deletedAt: number | null }
+
+/** One member's review of a listing: 1-5 stars and some words. One per member per listing. */
+export type Review = { productId: string; userId: string; rating: number; body: string; createdAt: number; updatedAt: number }
 
 export type Maker = { id: string; name: string; profileUrl: string; headline: string; avatar: string | null; web: string | null; accounts: string[]; createdAt: number }
 
@@ -176,6 +188,60 @@ export class Store {
         redeemed_at INTEGER
       );
       CREATE INDEX IF NOT EXISTS invites_inviter ON invites(inviter_id, earned_at);
+      -- Karma: an append-only ledger. dedupe makes a retry or a double click pay once.
+      CREATE TABLE IF NOT EXISTS karma_events (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        action TEXT NOT NULL,
+        ref TEXT NOT NULL DEFAULT '',
+        points INTEGER NOT NULL,
+        day TEXT NOT NULL DEFAULT '',
+        dedupe TEXT NOT NULL UNIQUE,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS karma_user ON karma_events(user_id, created_at);
+      CREATE INDEX IF NOT EXISTS karma_time ON karma_events(created_at);
+      CREATE INDEX IF NOT EXISTS karma_daily ON karma_events(user_id, action, day);
+      CREATE INDEX IF NOT EXISTS karma_ref ON karma_events(ref);
+      -- A free Featured week for every KARMA_PER_CREDIT karma: one row per milestone crossed, never granted twice.
+      CREATE TABLE IF NOT EXISTS karma_credits (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        milestone INTEGER NOT NULL,
+        granted_at INTEGER NOT NULL,
+        redeemed_product TEXT,
+        redeemed_at INTEGER,
+        PRIMARY KEY (user_id, milestone)
+      );
+      CREATE TABLE IF NOT EXISTS comments (
+        id TEXT PRIMARY KEY,
+        product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        parent_id TEXT,
+        body TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        deleted_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS comments_product ON comments(product_id, created_at);
+      CREATE TABLE IF NOT EXISTS reviews (
+        product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        rating INTEGER NOT NULL,
+        body TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (product_id, user_id)
+      );
+      -- Outside sign-ins (Sign in with CoinPay): linked by the provider's subject, never by email.
+      CREATE TABLE IF NOT EXISTS user_identities (
+        provider TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        email TEXT,
+        name TEXT,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (provider, subject)
+      );
+      CREATE INDEX IF NOT EXISTS user_identities_user ON user_identities(user_id);
       CREATE TABLE IF NOT EXISTS payments (
         ref TEXT PRIMARY KEY,
         product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
@@ -193,6 +259,9 @@ export class Store {
     if (!has('magic_links', 'ref')) this.db.exec('ALTER TABLE magic_links ADD COLUMN ref TEXT')
     // Hosted checkout sessions (0.5.0): the session is how CoinPay's webhook finds the row.
     for (const col of ['checkout_session_id', 'customer_email', 'account_id', 'payment_id']) if (!has('payments', col)) this.db.exec(`ALTER TABLE payments ADD COLUMN ${col} TEXT`)
+    // Karma (0.6.0): who cast a vote, when they were signed in; review totals beside the vote count.
+    if (!has('votes', 'user_id')) this.db.exec('ALTER TABLE votes ADD COLUMN user_id TEXT')
+    for (const col of ['review_count', 'review_sum']) if (!has('products', col)) this.db.exec(`ALTER TABLE products ADD COLUMN ${col} INTEGER NOT NULL DEFAULT 0`)
     this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS payments_session ON payments(checkout_session_id) WHERE checkout_session_id IS NOT NULL')
     this.backfillTags()
   }
@@ -246,6 +315,8 @@ export class Store {
       submitterUser: row.submitter_user,
       status: row.status,
       votes: row.votes,
+      reviews: row.review_count ?? 0,
+      rating: row.review_count ? Math.round((row.review_sum / row.review_count) * 10) / 10 : null,
       verifiedAt: row.verified_at,
       featuredUntil: row.featured_until,
       launchedAt: row.launched_at,
@@ -289,7 +360,7 @@ export class Store {
     return slug
   }
 
-  create(p: Omit<Product, 'votes' | 'verifiedAt' | 'featuredUntil' | 'launchedAt' | 'createdAt' | 'updatedAt' | 'makerId' | 'makerVerified' | 'ownerId' | 'claimedAt'>, submitter: string, now = Date.now()): Product {
+  create(p: Omit<Product, 'votes' | 'reviews' | 'rating' | 'verifiedAt' | 'featuredUntil' | 'launchedAt' | 'createdAt' | 'updatedAt' | 'makerId' | 'makerVerified' | 'ownerId' | 'claimedAt'>, submitter: string, now = Date.now()): Product {
     this.db
       .query(
         `INSERT INTO products (id, slug, url, url_key, domain, name, tagline, description, logo, og_image, screenshot, images, videos, socials, tags, theme_color, llms, profile, record, extras, maker_name, maker_profile, status, submitter_user, submitter, launched_at, created_at, updated_at)
@@ -395,7 +466,9 @@ export class Store {
     const r = this.db
       .query('SELECT COUNT(*) AS invited, COUNT(earned_at) AS launched, COUNT(redeemed_at) AS used FROM invites WHERE inviter_id = ?')
       .get(userId) as { invited: number; launched: number; used: number }
-    return { code: this.inviteCode(userId), invited: r.invited, launched: r.launched, used: r.used, credits: r.launched - r.used }
+    const k = this.db.query('SELECT COUNT(*) AS granted, COUNT(redeemed_at) AS used FROM karma_credits WHERE user_id = ?').get(userId) as { granted: number; used: number }
+    const karmaCredits = k.granted - k.used
+    return { code: this.inviteCode(userId), invited: r.invited, launched: r.launched, used: r.used + k.used, credits: r.launched - r.used + karmaCredits, karmaCredits }
   }
 
   /** Spend one earned credit: the product is featured for `days` more. False when there is no credit left. */
@@ -404,7 +477,8 @@ export class Store {
       const r = this.db
         .query('UPDATE invites SET redeemed_product = ?, redeemed_at = ? WHERE invitee_id = (SELECT invitee_id FROM invites WHERE inviter_id = ? AND earned_at IS NOT NULL AND redeemed_at IS NULL ORDER BY earned_at LIMIT 1)')
         .run(productId, now, userId)
-      if (!r.changes) return false
+      // No invite credit left: a karma credit is the same free week.
+      if (!r.changes && !this.db.query('UPDATE karma_credits SET redeemed_product = ?, redeemed_at = ? WHERE rowid = (SELECT rowid FROM karma_credits WHERE user_id = ? AND redeemed_at IS NULL ORDER BY milestone LIMIT 1)').run(productId, now, userId).changes) return false
       this.db.query('UPDATE products SET featured_until = MAX(COALESCE(featured_until, 0), ?) + ? WHERE id = ?').run(now, days * 86400_000, productId)
       return true
     })()
@@ -413,6 +487,140 @@ export class Store {
   /** Every credit earned since `since`, for the inviters' leaderboard. */
   earnedInvites(since = 0): { inviter: string; at: number }[] {
     return (this.db.query('SELECT inviter_id, earned_at FROM invites WHERE earned_at IS NOT NULL AND earned_at >= ?').all(since) as { inviter_id: string; earned_at: number }[]).map((r) => ({ inviter: r.inviter_id, at: r.earned_at }))
+  }
+
+  // Outside identities (Sign in with CoinPay).
+
+  /** The member an outside account is linked to. */
+  identityUser(provider: string, subject: string): User | null {
+    const r = this.db.query('SELECT user_id FROM user_identities WHERE provider = ? AND subject = ?').get(provider, subject) as { user_id: string } | null
+    return r ? this.user(r.user_id) : null
+  }
+
+  /** Link an outside account to a member. False when it already belongs to someone else. */
+  linkIdentity(i: { provider: string; subject: string; userId: string; email?: string | null; name?: string | null }, now = Date.now()): boolean {
+    const owner = this.identityUser(i.provider, i.subject)
+    if (owner && owner.id !== i.userId) return false
+    this.db.query('INSERT INTO user_identities (provider, subject, user_id, email, name, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(provider, subject) DO UPDATE SET email = excluded.email, name = excluded.name').run(i.provider, i.subject, i.userId, i.email ?? null, i.name ?? null, now)
+    return true
+  }
+
+  identities(userId: string): { provider: string; subject: string; email: string | null; name: string | null }[] {
+    return this.db.query('SELECT provider, subject, email, name FROM user_identities WHERE user_id = ? ORDER BY created_at').all(userId) as { provider: string; subject: string; email: string | null; name: string | null }[]
+  }
+
+  // Karma: the ledger. Rules (what pays, caps, self-dealing) live in karma.ts; this is storage.
+
+  /**
+   * Write one ledger row unless its dedupe key is taken, or a daily cap for the action
+   * is full. True when it was written. One transaction, so two clicks cannot both pass the cap.
+   */
+  addKarma(e: { userId: string; action: string; ref: string; points: number; dedupe: string; daily?: boolean; cap?: number }, now = Date.now()): boolean {
+    const day = e.daily || e.cap ? dayOf(now) : ''
+    return this.db.transaction(() => {
+      if (e.cap && (this.db.query('SELECT COUNT(*) AS n FROM karma_events WHERE user_id = ? AND action = ? AND day = ? AND points > 0').get(e.userId, e.action, day) as { n: number }).n >= e.cap) return false
+      return this.db.query('INSERT OR IGNORE INTO karma_events (id, user_id, action, ref, points, day, dedupe, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(newId(), e.userId, e.action, e.ref, e.points, day, e.dedupe, now).changes > 0
+    })()
+  }
+
+  /** Take back what one ledger row paid: a new negative row, once. The user it paid, or null when there was nothing to reverse. */
+  reverseKarma(dedupe: string, action: string, now = Date.now()): string | null {
+    const row = this.db.query('SELECT id, user_id, ref, points FROM karma_events WHERE dedupe = ? AND points > 0').get(dedupe) as { id: string; user_id: string; ref: string; points: number } | null
+    if (!row) return null
+    const r = this.db.query('INSERT OR IGNORE INTO karma_events (id, user_id, action, ref, points, day, dedupe, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(newId(), row.user_id, action, row.ref, -row.points, '', `reverse:${row.id}`, now)
+    return r.changes ? row.user_id : null
+  }
+
+  /** Every unreversed positive row about a listing (its id, or `<id>:…`): what a takedown takes back. */
+  karmaAbout(productId: string): string[] {
+    return (this.db.query("SELECT e.dedupe FROM karma_events e WHERE (e.ref = ? OR e.ref LIKE ? ESCAPE '\\') AND e.points > 0 AND NOT EXISTS (SELECT 1 FROM karma_events r WHERE r.dedupe = 'reverse:' || e.id)").all(productId, `${productId.replace(/[\\%_]/g, (c) => `\\${c}`)}:%`) as { dedupe: string }[]).map((r) => r.dedupe)
+  }
+
+  karmaTotal(userId: string, since = 0): number {
+    return (this.db.query('SELECT COALESCE(SUM(points), 0) AS n FROM karma_events WHERE user_id = ? AND created_at >= ?').get(userId, since) as { n: number }).n
+  }
+
+  /** Several members' all-time karma at once, for the names next to comments and reviews. */
+  karmaOf(userIds: string[]): Map<string, number> {
+    const ids = [...new Set(userIds)]
+    if (!ids.length) return new Map()
+    const rows = this.db.query(`SELECT user_id, COALESCE(SUM(points), 0) AS n FROM karma_events WHERE user_id IN (${ids.map(() => '?').join(',')}) GROUP BY user_id`).all(...ids) as { user_id: string; n: number }[]
+    return new Map(ids.map((id) => [id, rows.find((r) => r.user_id === id)?.n ?? 0]))
+  }
+
+  karmaEvents(userId: string, limit = 30): KarmaEvent[] {
+    return (this.db.query('SELECT * FROM karma_events WHERE user_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?').all(userId, limit) as any[]).map((r) => ({ id: r.id, userId: r.user_id, action: r.action, ref: r.ref, points: r.points, createdAt: r.created_at }))
+  }
+
+  /** Every ledger row since `since`, for the karma leaderboard. */
+  karmaSince(since = 0): { userId: string; points: number; at: number }[] {
+    return (this.db.query('SELECT user_id, points, created_at FROM karma_events WHERE created_at >= ?').all(since) as { user_id: string; points: number; created_at: number }[]).map((r) => ({ userId: r.user_id, points: r.points, at: r.created_at }))
+  }
+
+  /** Grant a credit for every `per` karma milestone reached and not granted before. Returns how many were new. */
+  grantKarmaCredits(userId: string, per: number, now = Date.now()): number {
+    if (!(per > 0)) return 0
+    const reached = Math.floor(this.karmaTotal(userId) / per)
+    let n = 0
+    for (let m = 1; m <= reached; m++) n += this.db.query('INSERT OR IGNORE INTO karma_credits (user_id, milestone, granted_at) VALUES (?, ?, ?)').run(userId, m * per, now).changes
+    return n
+  }
+
+  karmaCredits(userId: string): { granted: number; used: number; best: number } {
+    return this.db.query('SELECT COUNT(*) AS granted, COUNT(redeemed_at) AS used, COALESCE(MAX(milestone), 0) AS best FROM karma_credits WHERE user_id = ?').get(userId) as { granted: number; used: number; best: number }
+  }
+
+  // Comments and reviews.
+
+  addComment(c: { productId: string; userId: string; parentId: string | null; body: string }, now = Date.now()): Comment {
+    const id = newId()
+    this.db.query('INSERT INTO comments (id, product_id, user_id, parent_id, body, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(id, c.productId, c.userId, c.parentId, c.body, now)
+    return this.comment(id)!
+  }
+
+  comment(id: string): Comment | null {
+    const r: any = this.db.query('SELECT * FROM comments WHERE id = ?').get(id)
+    return r ? { id: r.id, productId: r.product_id, userId: r.user_id, parentId: r.parent_id, body: r.body, createdAt: r.created_at, deletedAt: r.deleted_at } : null
+  }
+
+  /** A listing's comments, oldest first; deleted ones only while a reply hangs off them. */
+  comments(productId: string): Comment[] {
+    return (this.db.query('SELECT * FROM comments c WHERE product_id = ? AND (deleted_at IS NULL OR EXISTS (SELECT 1 FROM comments r WHERE r.parent_id = c.id AND r.deleted_at IS NULL)) ORDER BY created_at, rowid').all(productId) as any[]).map((r) => ({ id: r.id, productId: r.product_id, userId: r.user_id, parentId: r.parent_id, body: r.deleted_at ? '' : r.body, createdAt: r.created_at, deletedAt: r.deleted_at }))
+  }
+
+  /** Soft delete: replies keep their place; the words go. */
+  deleteComment(id: string, now = Date.now()): boolean {
+    return this.db.query("UPDATE comments SET deleted_at = ?, body = '' WHERE id = ? AND deleted_at IS NULL").run(now, id).changes > 0
+  }
+
+  /** Write or replace a member's review; the listing's totals follow. */
+  putReview(r: { productId: string; userId: string; rating: number; body: string }, now = Date.now()): Review {
+    this.db.transaction(() => {
+      this.db.query('INSERT INTO reviews (product_id, user_id, rating, body, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(product_id, user_id) DO UPDATE SET rating = excluded.rating, body = excluded.body, updated_at = excluded.updated_at').run(r.productId, r.userId, r.rating, r.body, now, now)
+      this.reviewTotals(r.productId)
+    })()
+    return this.review(r.productId, r.userId)!
+  }
+
+  deleteReview(productId: string, userId: string): boolean {
+    return this.db.transaction(() => {
+      const n = this.db.query('DELETE FROM reviews WHERE product_id = ? AND user_id = ?').run(productId, userId).changes
+      this.reviewTotals(productId)
+      return n > 0
+    })()
+  }
+
+  private reviewTotals(productId: string): void {
+    this.db.query('UPDATE products SET review_count = (SELECT COUNT(*) FROM reviews WHERE product_id = ?), review_sum = (SELECT COALESCE(SUM(rating), 0) FROM reviews WHERE product_id = ?) WHERE id = ?').run(productId, productId, productId)
+  }
+
+  review(productId: string, userId: string): Review | null {
+    const r: any = this.db.query('SELECT * FROM reviews WHERE product_id = ? AND user_id = ?').get(productId, userId)
+    return r ? { productId: r.product_id, userId: r.user_id, rating: r.rating, body: r.body, createdAt: r.created_at, updatedAt: r.updated_at } : null
+  }
+
+  reviews(productId: string): Review[] {
+    return (this.db.query('SELECT * FROM reviews WHERE product_id = ? ORDER BY updated_at DESC').all(productId) as any[]).map((r) => ({ productId: r.product_id, userId: r.user_id, rating: r.rating, body: r.body, createdAt: r.created_at, updatedAt: r.updated_at }))
   }
 
   newApiKey(userId: string, now = Date.now()): string {
@@ -503,8 +711,8 @@ export class Store {
   }
   /** Every live launch, for browse.ts to filter and count. Cached until something changes. */
   allLive(): Product[] {
-    const stamp = this.db.query("SELECT COUNT(*) AS n, MAX(updated_at) AS u, SUM(votes) AS v, SUM(COALESCE(featured_until, 0)) AS f, COUNT(verified_at) AS c FROM products WHERE status = 'live'").get() as Record<string, number | null>
-    const key = `${stamp.n}:${stamp.u}:${stamp.v}:${stamp.f}:${stamp.c}`
+    const stamp = this.db.query("SELECT COUNT(*) AS n, MAX(updated_at) AS u, SUM(votes) AS v, SUM(COALESCE(featured_until, 0)) AS f, COUNT(verified_at) AS c, SUM(review_count) AS rc, SUM(review_sum) AS rs FROM products WHERE status = 'live'").get() as Record<string, number | null>
+    const key = `${stamp.n}:${stamp.u}:${stamp.v}:${stamp.f}:${stamp.c}:${stamp.rc}:${stamp.rs}`
     if (this.liveCache?.key !== key) this.liveCache = { key, products: (this.db.query("SELECT * FROM products WHERE status = 'live'").all() as any[]).map((r) => this.toProduct(r)!) }
     return this.liveCache.products
   }
@@ -524,8 +732,8 @@ export class Store {
   }
 
   /** One vote per visitor per product. True when it counted. */
-  vote(productId: string, voter: string, now = Date.now()): boolean {
-    const r = this.db.query('INSERT OR IGNORE INTO votes (product_id, voter, created_at) VALUES (?, ?, ?)').run(productId, voter, now)
+  vote(productId: string, voter: string, now = Date.now(), userId: string | null = null): boolean {
+    const r = this.db.query('INSERT OR IGNORE INTO votes (product_id, voter, created_at, user_id) VALUES (?, ?, ?, ?)').run(productId, voter, now, userId)
     if (!r.changes) return false
     this.db.query('UPDATE products SET votes = votes + 1 WHERE id = ?').run(productId)
     return true

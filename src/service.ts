@@ -9,6 +9,7 @@
  *   refetch  read the homepage again (the maker changed their logo)
  *   verify   the maker put our badge on their site: a followed link back
  *   feature  pay on CoinPay's hosted checkout (any coin or PayPal) to sit on top for a week
+ *   vote, comment, review, share   what members do on a listing; each pays karma (karma.ts)
  *
  * Products are described in the LogicSRC open specs: each one is an OpenSite
  * record (logicsrc.com/docs/opensite) and an OpenProfile.md with Kind
@@ -20,7 +21,8 @@ import { Resolver } from 'node:dns/promises'
 import { keyedSection, listSection, makeOpenProfile, renderOpenProfile } from '@profullstack/openprofile'
 import { autofetch, clip, FetchError, normalizeUrl, readProfile, safeFetch, SOCIAL_KINDS, videoFrom, type FetchOptions, type SiteInfo, type Video } from './fetch.js'
 import { Media, screenshot } from './media.js'
-import { dayOf, makerIdFor, newId, Store, type Product, type User } from './db.js'
+import { dayOf, makerIdFor, newId, Store, type Comment, type Product, type Review, type User } from './db.js'
+import { Karma, SHARE_NETWORKS } from './karma.js'
 import { cleanTags } from './tags.js'
 import { validEmail } from './auth.js'
 import { CoinPay, CoinPayError, readWebhook, verifyWebhook } from '@profullstack/coinpay-onboard'
@@ -43,6 +45,8 @@ export type Config = {
   claimSecret?: string
   /** TXT lookups; tests pass their own. */
   resolveTxt?: (name: string) => Promise<string[][]>
+  /** Karma per free Featured week (KARMA_PER_CREDIT, default 500). */
+  karmaPerCredit?: number
 }
 
 /** The record an owner adds: `_built-indie.<domain> TXT "built-indie-verify=<token>"` (or the same on the domain itself). */
@@ -75,7 +79,10 @@ export type Edit = Partial<{ name: string; tagline: string; description: string;
 const list = (v: string[] | string | undefined) => (Array.isArray(v) ? v : String(v ?? '').split(/[\n,]+/)).map((s) => s.trim()).filter(Boolean)
 
 export class BuiltIndie {
-  constructor(readonly store: Store, readonly media: Media, readonly config: Config) {}
+  readonly karma: Karma
+  constructor(readonly store: Store, readonly media: Media, readonly config: Config) {
+    this.karma = new Karma(store, config.karmaPerCredit ?? 500)
+  }
 
   /** A product page's public address. */
   link(p: Pick<Product, 'slug'>): string {
@@ -150,7 +157,7 @@ export class BuiltIndie {
     for (const name of names) {
       const records = await lookup(name).catch(() => [] as string[][])
       if (records.some((chunks) => chunks.join('').trim() === want)) {
-        this.store.claim(p.id, user.id)
+        this.claimed(p, user, false)
         return { ok: true, looked, method: 'dns' }
       }
     }
@@ -160,16 +167,23 @@ export class BuiltIndie {
       return b?.productId === p.id && b.userId === user.id
     })
     if (own) {
-      this.store.claim(p.id, user.id)
-      this.store.setVerified(p.id, Date.now())
+      this.claimed(p, user, true)
       return { ok: true, looked, method: 'badge' }
     }
     if (this.hasClaimBadge(html, token)) {
-      this.store.claim(p.id, user.id)
-      if (this.linksBack(html)) this.store.setVerified(p.id, Date.now())
+      this.claimed(p, user, this.linksBack(html))
       return { ok: true, looked, method: 'badge' }
     }
     return { ok: false, looked }
+  }
+
+  /** The claim took: ownership, karma for it, and for the badge when it was the proof. */
+  private claimed(p: Product, user: User, verified: boolean): void {
+    this.store.claim(p.id, user.id)
+    if (verified) this.store.setVerified(p.id, Date.now())
+    const now = this.store.product(p.id)!
+    if (now.status === 'live') this.karma.claimed(now, user.id)
+    if (verified && now.status === 'live') this.karma.badgeVerified(now)
   }
 
   /** The product's homepage HTML, read the safe way (no private addresses, robots honoured); '' if it will not load. */
@@ -236,10 +250,75 @@ export class BuiltIndie {
     if (p.status === 'hidden') throw new InputError('This product was taken down.')
     if (!p.name.trim()) throw new InputError('Give it a name', 'name')
     const live = this.store.update(p.id, { status: 'live' })!
+    this.karma.launched(live)
+    // A claim made while it was a draft pays once it is live.
+    if (live.ownerId) this.karma.claimed(live, live.ownerId)
     // An invited member's first live listing earns whoever invited them a free Featured week.
     const inviter = p.submitterUser ? this.store.earnInvite(p.submitterUser, p.id) : null
-    if (inviter) this.onInviteEarned?.(inviter, live)
+    if (inviter) {
+      this.karma.inviteConverted(inviter, p.id)
+      this.onInviteEarned?.(inviter, live)
+    }
     return live
+  }
+
+  // What members do on a listing. Anyone may vote; comments and reviews need an account.
+
+  /** One vote per visitor (their address); a signed-in voter is noted and earns karma. True when it counted. */
+  vote(p: Product, voter: string, user: User | null = null): boolean {
+    if (p.status !== 'live') throw new InputError('Only a live listing takes votes.')
+    if (!this.store.vote(p.id, voter, Date.now(), user?.id ?? null)) return false
+    this.karma.voted(p, user?.id ?? null)
+    return true
+  }
+
+  comment(p: Product, user: User, text: string, parentId?: string | null): Comment {
+    if (p.status !== 'live') throw new InputError('Only a live listing takes comments.')
+    const body = String(text ?? '').replace(/\r\n?/g, '\n').replace(/\n{3,}/g, '\n\n').trim().slice(0, 2000)
+    if (body.length < 2) throw new InputError('Write something first.', 'body')
+    let parent: Comment | null = null
+    if (parentId) {
+      parent = this.store.comment(parentId)
+      if (!parent || parent.productId !== p.id || parent.deletedAt) throw new InputError('That comment is gone.', 'parent')
+      // One level of replies: answering a reply answers its thread.
+      if (parent.parentId) parent = this.store.comment(parent.parentId)
+    }
+    const c = this.store.addComment({ productId: p.id, userId: user.id, parentId: parent?.id ?? null, body })
+    this.karma.commented(p, user.id, c)
+    return c
+  }
+
+  /** Delete a comment: its author, or the admin. Takes back the karma it earned. */
+  deleteComment(id: string, user: User | null, admin = false): Comment {
+    const c = this.store.comment(id)
+    if (!c || c.deletedAt) throw new InputError('No such comment.')
+    if (!admin && c.userId !== user?.id) throw new InputError('Only its author can delete a comment.')
+    this.store.deleteComment(id)
+    this.karma.uncommented(id)
+    return c
+  }
+
+  review(p: Product, user: User, rating: unknown, text: unknown): Review {
+    if (p.status !== 'live') throw new InputError('Only a live listing takes reviews.')
+    const stars = Number(rating)
+    if (!Number.isInteger(stars) || stars < 1 || stars > 5) throw new InputError('Pick 1 to 5 stars.', 'rating')
+    const body = String(text ?? '').replace(/\r\n?/g, '\n').trim().slice(0, 2000)
+    const r = this.store.putReview({ productId: p.id, userId: user.id, rating: stars, body })
+    this.karma.reviewed(p, user.id, r)
+    return r
+  }
+
+  deleteReview(p: Product, userId: string): boolean {
+    const gone = this.store.deleteReview(p.id, userId)
+    if (gone) this.karma.unreviewed(p, userId)
+    return gone
+  }
+
+  /** A share button clicked. Pays a signed-in member (once per listing, network and day). */
+  share(p: Product, user: User | null, network: string): { counted: boolean } {
+    if (p.status !== 'live') throw new InputError('Only a live listing can be shared.')
+    if (!(SHARE_NETWORKS as readonly string[]).includes(network)) throw new InputError(`network is one of ${SHARE_NETWORKS.join(', ')}`, 'network')
+    return { counted: this.karma.shared(p, user?.id ?? null, network) }
   }
 
   /** Called when a listing earns its submitter's inviter a credit: the server mails them and refreshes the board. */
@@ -328,6 +407,7 @@ export class BuiltIndie {
     const html = await this.homepage(p)
     const ok = this.linksBack(html) || this.badgeIds(html).some((id) => this.store.badge(id)?.productId === p.id)
     this.store.setVerified(p.id, ok ? Date.now() : null)
+    if (ok && p.status === 'live') this.karma.badgeVerified(p)
     return ok
   }
 
