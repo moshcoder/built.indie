@@ -12,7 +12,7 @@ function product(o: Partial<Product>): Product {
     id: `p${n}`, slug: `p${n}`, url: `https://p${n}.test/`, domain: `p${n}.test`, name: `P${n}`, tagline: '', description: '',
     logo: null, ogImage: null, screenshot: null, images: [], videos: [], socials: {}, tags: [], themeColor: null, llms: null, profile: null, record: null,
     extras: { stack: null, pricing: null, openicon: null }, makerName: '', makerProfile: null, makerId: null, makerVerified: false, ownerId: null, claimedAt: null,
-    submitterUser: null, status: 'live', votes: 0, verifiedAt: null, featuredUntil: null, launchedAt: NOW - DAY / 2, createdAt: NOW, updatedAt: NOW,
+    submitterUser: null, status: 'live', votes: 0, reviews: 0, rating: null, verifiedAt: null, featuredUntil: null, launchedAt: NOW - DAY / 2, createdAt: NOW, updatedAt: NOW,
     ...o,
   }
 }

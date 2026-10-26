@@ -12,17 +12,19 @@ import { Hono, type Context } from 'hono'
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
 import { leaderboard } from '@profullstack/leaderboard/hono'
 import { Auth, consoleMailer, resendMailer, safeNext, SESSION_COOKIE, validEmail, type Mailer } from './auth.js'
-import { Store, type Product, type User, type Window } from './db.js'
+import { Store, type Comment, type Product, type Review, type User, type Window } from './db.js'
 import { privateAddress } from './fetch.js'
 import { CATEGORY_LABELS, parseQuery, queryString, search } from './browse.js'
-import { badgeSvg, launchBadgeSvg, boardPage, browsePage, cardImage, claimBadgeSnippet, claimMarkdown, claimPage, editPage, esc, helpPage, homePage, inviteLanding, invitePage, leaderboardPage, loginPage, makerPage, mePage, messagePage, productPage, submitPage, tagsPage, type Ctx, type InviterRow } from './html.js'
+import { badgeSvg, launchBadgeSvg, boardPage, browsePage, cardImage, claimBadgeSnippet, claimMarkdown, claimPage, editPage, esc, helpPage, homePage, inviteLanding, invitePage, leaderboardPage, loginPage, makerPage, mePage, messagePage, productPage, submitPage, tagsPage, type CommentView, type Ctx, type InviterRow, type ReviewView } from './html.js'
 import { normalizeTag } from './tags.js'
-import { inviteLeaderboard } from './leaderboard.js'
+import { siteLeaderboard } from './leaderboard.js'
+import { HOW_TO_EARN, SHARE_NETWORKS } from './karma.js'
 import { IMAGE_TYPES, Media } from './media.js'
 import { startPitFooterRefresh } from './pit-footer.js'
 import { RING_PLACEHOLDER, ringBar, startRingRefresh, visitorOnMoshpit } from './ring.js'
 import { BuiltIndie, CLAIM_LABEL, CLAIM_PREFIX, InputError, type Config, type Edit } from './service.js'
 import { autofetch, FetchError } from './fetch.js'
+import { COINPAY_ERRORS, coinpayOAuthFromEnv, isPlaceholder, mountCoinPaySignin, PROVIDER as COINPAY, type CoinPayOAuth } from './coinpay-signin.js'
 import { VERSION } from './version.js'
 
 export { VERSION }
@@ -52,7 +54,7 @@ const SECURITY_HEADERS: Record<string, string> = {
   'cross-origin-opener-policy': 'same-origin',
 }
 
-export type Deps = { service: BuiltIndie; auth: Auth; adminKey?: string; secureCookies?: boolean; mailer?: Mailer }
+export type Deps = { service: BuiltIndie; auth: Auth; adminKey?: string; secureCookies?: boolean; mailer?: Mailer; /** Sign in with CoinPay; off when null. */ coinpayOAuth?: CoinPayOAuth | null }
 
 /** The invite code from /i/<code>, kept until the visitor signs up (it also rides in the magic link). */
 const REF_COOKIE = 'bi_ref'
@@ -83,6 +85,8 @@ export function createApp(deps: Deps) {
   const app = new Hono<Env>()
   const readLimit = new Limiter(20, 10 * 60_000)
   const voteLimit = new Limiter(60, 10 * 60_000)
+  const commentLimit = new Limiter(10, 10 * 60_000)
+  const shareLimit = new Limiter(60, 10 * 60_000)
   const origin = config.origin
 
   const direct = (c: Context) => visitorOnMoshpit(SELF, c.req.header('host'), c.req.header('x-moshpit-name'))
@@ -91,7 +95,7 @@ export function createApp(deps: Deps) {
   const sessionUser = (c: Context) => deps.auth.sessionUser(getCookie(c, SESSION_COOKIE))
   const ctxOf = (c: Context<Env>): Ctx => {
     const v = voter(c)
-    return { origin, user: sessionUser(c), voted: (id) => store.voted(id, v) }
+    return { origin, user: sessionUser(c), voted: (id) => store.voted(id, v), coinpay: Boolean(deps.coinpayOAuth) }
   }
   // Links in mail open where the visitor asked from: the relay, or the Moshpit name itself.
   const here = (c: Context) => (direct(c) ? 'https://built.indie' : origin)
@@ -111,9 +115,26 @@ export function createApp(deps: Deps) {
   }
   const secure = (c: Context) => deps.secureCookies ?? (c.req.header('x-forwarded-proto') ?? 'https') === 'https'
 
-  // The invite program and its leaderboard (@profullstack/leaderboard over the invites table).
-  const board = inviteLeaderboard(store, origin)
-  const inviters = async (limit: number): Promise<InviterRow[]> => (await board.top({ board: 'invites', period: 'week', limit })).rows.map((r) => ({ ...r, url: `/leaderboard/u/${encodeURIComponent(r.id)}` }))
+  // The leaderboards (@profullstack/leaderboard over the karma ledger and the invites table).
+  const board = siteLeaderboard(store, origin)
+  const rowsOf = async (id: 'karma' | 'invites', period: 'week' | 'month' | 'all', limit: number): Promise<InviterRow[]> => (await board.top({ board: id, period, limit })).rows.map((r) => ({ ...r, url: `/leaderboard/u/${encodeURIComponent(r.id)}` }))
+  const inviters = (limit: number) => rowsOf('invites', 'week', limit)
+  /** Top karma this week; an empty week falls back to all time so the widget never looks dead. */
+  const topKarma = async (limit: number): Promise<{ period: 'week' | 'all'; rows: InviterRow[] }> => {
+    const week = await rowsOf('karma', 'week', limit)
+    return week.length ? { period: 'week', rows: week } : { period: 'all', rows: await rowsOf('karma', 'all', limit) }
+  }
+  // Every karma write: the board re-reads the ledger and checks badges (a projection is never record()ed).
+  service.karma.onChange = (userId) => {
+    board.invalidate()
+    board.award(userId).catch((e) => console.error(`[karma] badges: ${(e as Error).message}`))
+  }
+  service.karma.onCredit = (userId, granted) => {
+    const u = store.user(userId)
+    if (!u || !deps.mailer) return
+    const text = `Your karma on built.indie crossed another ${service.karma.perCredit}: that is ${granted === 1 ? 'a free Featured week' : `${granted} free Featured weeks`} (${config.featureDays} days pinned on the homepage).\n\nUse it: ${origin}/invite\nYour karma: ${origin}/me#karma`
+    deps.mailer({ to: u.email, subject: 'Your karma earned a free Featured week on built.indie', text, html: `<p>${esc(text).replace(/\n/g, '<br>')}</p>` }).catch((e) => console.error(`[karma] mail failed: ${(e as Error).message}`))
+  }
   const inviteLink = (user: User) => `${origin}/i/${store.inviteCode(user.id)}`
   service.onInviteEarned = (inviterId, p) => {
     board.invalidate()
@@ -157,7 +178,7 @@ export function createApp(deps: Deps) {
 
   // Boards.
   app.get('/', async (c) =>
-    page(c, homePage(ctxOf(c), { today: store.list('today'), featured: store.list('featured', 3), yesterday: store.onDay(new Date(Date.now() - 86400_000).toISOString().slice(0, 10), 3), stats: store.count(), inviters: await inviters(5), featureDays: config.featureDays, featureUsd: config.featureUsd })),
+    page(c, homePage(ctxOf(c), { today: store.list('today'), featured: store.list('featured', 3), yesterday: store.onDay(new Date(Date.now() - 86400_000).toISOString().slice(0, 10), 3), stats: store.count(), inviters: await inviters(5), karma: await topKarma(5), featureDays: config.featureDays, featureUsd: config.featureUsd })),
   )
   app.get('/top/:window', (c) => {
     const w = c.req.param('window') as Window
@@ -209,10 +230,28 @@ export function createApp(deps: Deps) {
   })
 
   // A product.
-  const productView = (c: Context<Env>, p: Product) =>
+  /** Comments and reviews as the page shows them: public names and karma, never emails. */
+  const discussion = (p: Product, me: User | null) => {
+    const comments = store.comments(p.id)
+    const reviews = store.reviews(p.id)
+    const karmaOf = store.karmaOf([...comments.map((x) => x.userId), ...reviews.map((x) => x.userId)])
+    const names = new Map<string, string>()
+    const who = (id: string) => names.get(id) ?? (names.set(id, store.publicName(id)), names.get(id)!)
+    const owner = p.ownerId ?? p.submitterUser
+    const cv = (x: Comment): CommentView => ({ id: x.id, parentId: x.parentId, body: x.body, deleted: Boolean(x.deletedAt), at: x.createdAt, author: x.deletedAt ? '' : who(x.userId), karma: karmaOf.get(x.userId) ?? 0, maker: x.userId === owner, mine: Boolean(me && x.userId === me.id) })
+    const rv = (x: Review): ReviewView => ({ rating: x.rating, body: x.body, at: x.updatedAt, author: who(x.userId), karma: karmaOf.get(x.userId) ?? 0, mine: Boolean(me && x.userId === me.id) })
+    return { comments: comments.map(cv), reviews: reviews.map(rv), myReview: me ? store.review(p.id, me.id) : null }
+  }
+  const productView = (c: Context<Env>, p: Product, extra: { error?: string } = {}, status = 200) =>
     page(
       c,
       productPage(ctxOf(c), {
+        ...discussion(p, sessionUser(c)),
+        error: extra.error,
+        selfListing: (() => {
+          const u = sessionUser(c)
+          return Boolean(u && (p.ownerId === u.id || p.submitterUser === u.id))
+        })(),
         product: p,
         award: store.awards(p.id),
         maker: p.makerId ? store.maker(p.makerId) : null,
@@ -229,6 +268,7 @@ export function createApp(deps: Deps) {
         featureDays: config.featureDays,
         payments: Boolean(config.coinpay),
       }),
+      status,
     )
   app.get('/p/:slug', (c) => {
     const p = store.bySlug(c.req.param('slug'))
@@ -319,7 +359,21 @@ export function createApp(deps: Deps) {
     const inviter = store.inviterOf(getCookie(c, REF_COOKIE) ?? '')
     return inviter && !sessionUser(c) ? store.publicName(inviter) : null
   }
-  app.get('/login', (c) => page(c, loginPage(ctxOf(c), { next: safeNext(c.req.query('next')), invitedBy: invitedBy(c) })))
+  app.get('/login', (c) => page(c, loginPage(ctxOf(c), { next: safeNext(c.req.query('next')), invitedBy: invitedBy(c), error: COINPAY_ERRORS[c.req.query('error') ?? ''] })))
+  // Sign in with CoinPay (coinpay-signin.ts): /api/v1/coinpay/login and /callback.
+  mountCoinPaySignin(app, {
+    store,
+    auth: deps.auth,
+    origin,
+    oauth: deps.coinpayOAuth ?? null,
+    secure,
+    sessionUser,
+    // A new member who came through an invite link counts, as with a magic link.
+    onNewMember: (c, user) => {
+      const ref = getCookie(c, REF_COOKIE)
+      if (ref) store.recordInvite(user.id, ref), deleteCookie(c, REF_COOKIE, { path: '/' })
+    },
+  })
   app.post('/login', async (c) => {
     const form = (await c.req.parseBody()) as Record<string, string>
     const next = safeNext(form.next)
@@ -342,15 +396,20 @@ export function createApp(deps: Deps) {
     deleteCookie(c, SESSION_COOKIE, { path: '/' })
     return c.redirect('/')
   })
+  const signinInfo = (c: Context, user: User) => ({
+    coinpay: store.identities(user.id).find((i) => i.provider === COINPAY) ?? null,
+    emailless: isPlaceholder(user.email),
+    coinpayNote: ({ connected: 'CoinPay is connected: sign in with it next time.', taken: 'That CoinPay account is already linked to another built.indie member.', welcome: 'Welcome! You signed in with CoinPay.' } as Record<string, string>)[c.req.query('coinpay') ?? ''] ?? null,
+  })
   app.get('/me', (c) => {
     const user = sessionUser(c)
-    return user ? page(c, mePage(ctxOf(c), { user, products: store.mine(user.id), invite: store.inviteStats(user.id) })) : toLogin(c)
+    return user ? page(c, mePage(ctxOf(c), { user, products: store.mine(user.id), invite: store.inviteStats(user.id), karma: service.karma.summary(user.id), howToEarn: HOW_TO_EARN, featureDays: config.featureDays, ...signinInfo(c, user) })) : toLogin(c)
   })
   app.post('/me/key', (c) => {
     const user = sessionUser(c)
     if (!user) return toLogin(c)
     if (crossSite(c)) return c.redirect('/me')
-    return page(c, mePage(ctxOf(c), { user, products: store.mine(user.id), apiKey: store.newApiKey(user.id), invite: store.inviteStats(user.id) }))
+    return page(c, mePage(ctxOf(c), { user, products: store.mine(user.id), apiKey: store.newApiKey(user.id), invite: store.inviteStats(user.id), karma: service.karma.summary(user.id), howToEarn: HOW_TO_EARN, featureDays: config.featureDays, ...signinInfo(c, user) }))
   })
 
   // Invites: a link per member; a new member it brings in who launches earns the inviter a free Featured week.
@@ -393,9 +452,12 @@ export function createApp(deps: Deps) {
   })
 
   // The leaderboard: our page, then the package answers everything under /leaderboard (JSON, RSS, share cards, widget).
-  app.get('/leaderboard', (c) => {
+  app.get('/leaderboard', async (c) => {
     const user = sessionUser(c)
-    return page(c, leaderboardPage(ctxOf(c), { featureDays: config.featureDays, featureUsd: config.featureUsd, me: user?.id ?? null }))
+    const which = c.req.query('board') === 'invites' ? 'invites' : 'karma'
+    // An empty week shows all time instead, so the board never opens blank.
+    const period = (await rowsOf(which, 'week', 1)).length ? 'week' : 'all'
+    return page(c, leaderboardPage(ctxOf(c), { board: which, period, featureDays: config.featureDays, featureUsd: config.featureUsd, perCredit: service.karma.perCredit, howToEarn: HOW_TO_EARN, me: user?.id ?? null }))
   })
   app.use('/leaderboard.json', leaderboard(board))
   app.use('/leaderboard/*', leaderboard(board))
@@ -404,7 +466,7 @@ export function createApp(deps: Deps) {
     const p = live(c.req.param('slug'))
     if (!p) return wantsJson(c) ? c.json({ error: 'no such product' }, 404) : c.notFound()
     if (crossSite(c)) return c.json({ error: 'vote from built.indie itself' }, 403)
-    const counted = voteLimit.allow(`vote:${ip(c)}`) && store.vote(p.id, voter(c))
+    const counted = voteLimit.allow(`vote:${ip(c)}`) && service.vote(p, voter(c), sessionUser(c))
     const now = store.product(p.id)!
     if (wantsJson(c)) return c.json({ slug: now.slug, votes: now.votes, counted, voted: true })
     const back = c.req.header('referer')
@@ -413,6 +475,66 @@ export function createApp(deps: Deps) {
       if (back && new URL(back).host === c.req.header('host')) to = new URL(back).pathname
     } catch {}
     return c.redirect(to)
+  })
+
+  // Comments, reviews and tracked shares: signed-in members, from this site only.
+  const back = (p: Product, hash: string) => `/p/${p.slug}#${hash}`
+  app.post('/p/:slug/comments', async (c) => {
+    const user = sessionUser(c)
+    if (!user) return toLogin(c)
+    const p = live(c.req.param('slug'))
+    if (!p) return c.notFound()
+    if (crossSite(c)) return c.redirect(back(p, 'comments'))
+    if (!commentLimit.allow(`comment:${user.id}`)) return productView(c, p, { error: 'That is a lot of comments. Wait a few minutes.' }, 429)
+    const form = (await c.req.parseBody()) as Record<string, string>
+    try {
+      const made = service.comment(p, user, form.body ?? '', form.parent || null)
+      return c.redirect(back(p, `c-${made.id}`))
+    } catch (e) {
+      if (e instanceof InputError) return productView(c, p, { error: e.message }, 400)
+      throw e
+    }
+  })
+  app.post('/p/:slug/comments/:id/delete', (c) => {
+    const user = sessionUser(c)
+    if (!user) return toLogin(c)
+    const p = store.bySlug(c.req.param('slug'))
+    if (!p) return c.notFound()
+    if (crossSite(c)) return c.redirect(back(p, 'comments'))
+    const cm = store.comment(c.req.param('id'))
+    if (!cm || cm.productId !== p.id) return c.redirect(back(p, 'comments'))
+    try {
+      service.deleteComment(cm.id, user)
+    } catch (e) {
+      if (!(e instanceof InputError)) throw e
+    }
+    return c.redirect(back(p, 'comments'))
+  })
+  app.post('/p/:slug/review', async (c) => {
+    const user = sessionUser(c)
+    if (!user) return toLogin(c)
+    const p = live(c.req.param('slug'))
+    if (!p) return c.notFound()
+    if (crossSite(c)) return c.redirect(back(p, 'reviews'))
+    const form = (await c.req.parseBody()) as Record<string, string>
+    try {
+      if (form.action === 'delete') service.deleteReview(p, user.id)
+      else service.review(p, user, form.rating, form.body)
+      return c.redirect(back(p, 'reviews'))
+    } catch (e) {
+      if (e instanceof InputError) return productView(c, p, { error: e.message }, 400)
+      throw e
+    }
+  })
+  // A share button: app.js sends a beacon here before the share window opens.
+  app.post('/p/:slug/share', (c) => {
+    const p = live(c.req.param('slug'))
+    if (!p) return c.json({ error: 'no such product' }, 404)
+    if (crossSite(c)) return c.json({ error: 'share from built.indie itself' }, 403)
+    const net = c.req.query('net') ?? ''
+    if (!(SHARE_NETWORKS as readonly string[]).includes(net)) return c.json({ error: `net is one of ${SHARE_NETWORKS.join(', ')}` }, 400)
+    if (!shareLimit.allow(`share:${ip(c)}`)) return c.json({ counted: false })
+    return c.json(service.share(p, sessionUser(c), net))
   })
 
   app.post('/p/:slug/verify', async (c) => {
@@ -506,7 +628,7 @@ export function createApp(deps: Deps) {
   })
   app.get('/robots.txt', (c) => c.text(`User-agent: *\nAllow: /\nDisallow: /p/*/edit\nSitemap: ${origin}/sitemap.xml\n`))
   app.get('/llms.txt', (c) =>
-    c.text(`# built.indie\n\n> Launch your indie product with one URL. built.indie reads your homepage (meta tags, Open Graph, JSON-LD, llms.txt, OpenSite, OpenProfile), saves the logo and screenshots, and puts it on a daily upvote board. Free, open source, no account.\n\n## API\n\n- [Help](${origin}/help): JSON API, CLI, TUI and MCP\n- [Today](${origin}/api/v1/products?window=today): today's launches as JSON\n- [Launch](${origin}/help#api): POST /api/v1/products {"url": "..."}\n- [MCP](${origin}/help#mcp): claude mcp add builtindie -- bunx @profullstack/builtindie mcp\n- [Install](${origin}/install.sh): curl -fsSL ${origin}/install.sh | sh\n- [Feed](${origin}/feed.xml): RSS of every launch\n`),
+    c.text(`# built.indie\n\n> Launch your indie product with one URL. built.indie reads your homepage (meta tags, Open Graph, JSON-LD, llms.txt, OpenSite, OpenProfile), saves the logo and screenshots, and puts it on a daily upvote board. Free, open source, no account.\n\n## API\n\n- [Help](${origin}/help): JSON API, CLI, TUI and MCP\n- [Today](${origin}/api/v1/products?window=today): today's launches as JSON\n- [Launch](${origin}/help#api): POST /api/v1/products {"url": "..."}\n- [MCP](${origin}/help#mcp): claude mcp add builtindie -- bunx @profullstack/builtindie mcp\n- [Install](${origin}/install.sh): curl -fsSL ${origin}/install.sh | sh\n- [Feed](${origin}/feed.xml): RSS of every launch\n- [Karma](${origin}/help#karma): members earn karma for launching, voting, reviewing, commenting and sharing; every ${service.karma.perCredit} karma is a free Featured week. GET /api/v1/karma (your key), GET /api/v1/leaderboard?board=karma&period=week\n- [Leaderboard](${origin}/leaderboard): top karma (default) and top inviters; JSON at /leaderboard/karma.json?period=week\n- [Comments and reviews](${origin}/help#api): GET/POST /api/v1/products/<slug>/comments, GET/POST /api/v1/products/<slug>/reviews, POST /api/v1/products/<slug>/share\n`),
   )
   app.get('/.well-known/openprofile.md', (c) =>
     c.body(`# built.indie\n\n- **Kind**: organization\n- **Web**: ${origin}\n- **Avatar**: ${origin}/icon-512.png\n\nLaunch your indie product with one URL.\n\n## Accounts\n\n- ${'https://github.com/moshcoder/built.indie'}\n- https://pit.world/ring\n\n## Topics\n\n- indie\n- launches\n- startups\n\n## Operator\n\n- **Name**: Profullstack, Inc.\n- **Profile**: https://profullstack.com/.well-known/openprofile.md\n`, 200, { 'content-type': 'text/markdown; charset=utf-8', 'access-control-allow-origin': '*' }),
@@ -533,6 +655,8 @@ export function createApp(deps: Deps) {
     domain: p.domain,
     status: p.status,
     votes: p.votes,
+    reviews: p.reviews,
+    rating: p.rating,
     tags: p.tags,
     logo: p.logo ? `${origin}/m/${p.id}/${p.logo}` : null,
     card_image: p.ogImage ? `${origin}/m/${p.id}/${p.ogImage}` : null,
@@ -671,7 +795,7 @@ export function createApp(deps: Deps) {
     const p = live(c.req.param('slug'))
     if (!p) return c.json({ error: 'no such product' }, 404)
     if (crossSite(c)) return c.json({ error: 'vote from built.indie itself' }, 403)
-    const counted = voteLimit.allow(`vote:${ip(c)}`) && store.vote(p.id, voter(c))
+    const counted = voteLimit.allow(`vote:${ip(c)}`) && service.vote(p, voter(c), apiUser(c))
     return c.json({ slug: p.slug, votes: store.product(p.id)!.votes, counted })
   })
 
@@ -682,6 +806,7 @@ export function createApp(deps: Deps) {
       if (!p) return c.json({ error: 'no such product' }, 404)
       store.update(p.id, { status: 'hidden' })
       store.revokeInvite(p.id)
+      service.karma.takenDown(p.id)
       board.invalidate()
       return c.json({ hidden: true })
     }
@@ -712,11 +837,11 @@ export function createApp(deps: Deps) {
   app.get('/api/v1/me', (c) => {
     const user = apiUser(c)
     if (!user) return c.json(NEEDS_ACCOUNT, 401)
-    return c.json({ email: user.email, products: store.mine(user.id).map((p) => ({ ...apiProduct(p), owner: p.ownerId === user.id })), invite: apiInvite(user) })
+    return c.json({ email: isPlaceholder(user.email) ? null : user.email, coinpay: Boolean(store.identities(user.id).some((i) => i.provider === COINPAY)), products: store.mine(user.id).map((p) => ({ ...apiProduct(p), owner: p.ownerId === user.id })), invite: apiInvite(user), karma: apiKarma(user) })
   })
   const apiInvite = (user: User) => {
     const s = store.inviteStats(user.id)
-    return { link: inviteLink(user), code: s.code, invited: s.invited, launched: s.launched, credits: s.credits, used: s.used, feature_days: config.featureDays }
+    return { link: inviteLink(user), code: s.code, invited: s.invited, launched: s.launched, credits: s.credits, karma_credits: s.karmaCredits, used: s.used, feature_days: config.featureDays }
   }
   app.get('/api/v1/invites', (c) => {
     const user = apiUser(c)
@@ -729,6 +854,93 @@ export function createApp(deps: Deps) {
     try {
       const after = service.redeemCredit(p, user)
       return c.json({ featured_until: new Date(after.featuredUntil!).toISOString(), credits: store.inviteStats(user.id).credits })
+    } catch (e) {
+      return apiError(c, e)
+    }
+  })
+
+  // Karma, comments, reviews, shares.
+  const apiKarma = (user: User) => {
+    const k = service.karma.summary(user.id)
+    return { total: k.total, week: k.week, per_credit: k.perCredit, next_credit_in: k.nextCreditIn, credits: { earned: k.credits.granted, used: k.credits.used }, events: k.events.map((e) => ({ action: e.action, label: e.label, ref: e.ref, points: e.points, at: new Date(e.at).toISOString() })), how_to_earn: HOW_TO_EARN, leaderboard: `${origin}/leaderboard` }
+  }
+  app.get('/api/v1/karma', (c) => {
+    const user = apiUser(c)
+    return user ? c.json(apiKarma(user)) : c.json({ ...NEEDS_ACCOUNT, how_to_earn: HOW_TO_EARN, leaderboard: `${origin}/api/v1/leaderboard?board=karma&period=week` }, 401)
+  })
+  app.get('/api/v1/leaderboard', async (c) => {
+    const which = c.req.query('board') === 'invites' ? 'invites' : 'karma'
+    const period = (['week', 'month', 'all'] as const).find((x) => x === c.req.query('period')) ?? 'week'
+    const limit = Math.min(100, Math.max(1, Number(c.req.query('limit') ?? 25) || 25))
+    const top = await board.top({ board: which, period, limit })
+    return c.json({ board: which, period, total: top.total, rows: top.rows.map((r) => ({ rank: r.rank, id: r.id, name: r.name, value: r.value, badges: r.badges, url: `${origin}/leaderboard/u/${encodeURIComponent(r.id)}` })), web: `${origin}/leaderboard${which === 'karma' ? '' : '?board=invites'}` }, 200, { 'access-control-allow-origin': '*' })
+  })
+  const apiComment = (p: Product, x: CommentView) => ({ id: x.id, parent: x.parentId, body: x.deleted ? null : x.body, deleted: x.deleted, author: x.author || null, karma: x.karma, maker: x.maker, at: new Date(x.at).toISOString(), url: `${origin}/p/${p.slug}#c-${x.id}` })
+  app.get('/api/v1/products/:slug/comments', (c) => {
+    const p = live(c.req.param('slug'))
+    if (!p) return c.json({ error: 'no such product' }, 404)
+    return c.json({ slug: p.slug, comments: discussion(p, apiUser(c)).comments.map((x) => ({ ...apiComment(p, x), mine: x.mine })) }, 200, { 'access-control-allow-origin': '*' })
+  })
+  app.post('/api/v1/products/:slug/comments', async (c) => {
+    const user = apiUser(c)
+    if (!user) return c.json(NEEDS_ACCOUNT, 401)
+    const p = live(c.req.param('slug'))
+    if (!p) return c.json({ error: 'no such product' }, 404)
+    if (!commentLimit.allow(`comment:${user.id}`)) return c.json({ error: 'too many comments; wait a few minutes' }, 429)
+    const b = await body(c)
+    try {
+      const made = service.comment(p, user, String(b.body ?? b.text ?? ''), b.parent ? String(b.parent) : null)
+      const view = discussion(p, user).comments.find((x) => x.id === made.id)!
+      return c.json({ comment: apiComment(p, view), karma: store.karmaTotal(user.id) }, 201)
+    } catch (e) {
+      return apiError(c, e)
+    }
+  })
+  app.delete('/api/v1/comments/:id', (c) => {
+    const admin = isAdmin(c)
+    const user = apiUser(c)
+    if (!admin && !user) return c.json(NEEDS_ACCOUNT, 401)
+    try {
+      service.deleteComment(c.req.param('id'), user, admin)
+      return c.json({ deleted: true })
+    } catch (e) {
+      return apiError(c, e)
+    }
+  })
+  const apiReview = (x: ReviewView) => ({ rating: x.rating, body: x.body, author: x.author, karma: x.karma, at: new Date(x.at).toISOString() })
+  app.get('/api/v1/products/:slug/reviews', (c) => {
+    const p = live(c.req.param('slug'))
+    if (!p) return c.json({ error: 'no such product' }, 404)
+    return c.json({ slug: p.slug, rating: p.rating, count: p.reviews, reviews: discussion(p, null).reviews.map(apiReview) }, 200, { 'access-control-allow-origin': '*' })
+  })
+  app.post('/api/v1/products/:slug/reviews', async (c) => {
+    const user = apiUser(c)
+    if (!user) return c.json(NEEDS_ACCOUNT, 401)
+    const p = live(c.req.param('slug'))
+    if (!p) return c.json({ error: 'no such product' }, 404)
+    const b = await body(c)
+    try {
+      const r = service.review(p, user, b.rating, b.body ?? b.text ?? '')
+      const now = store.product(p.id)!
+      return c.json({ review: { rating: r.rating, body: r.body }, product: { rating: now.rating, count: now.reviews }, karma: store.karmaTotal(user.id) }, 201)
+    } catch (e) {
+      return apiError(c, e)
+    }
+  })
+  app.delete('/api/v1/products/:slug/reviews', (c) => {
+    const user = apiUser(c)
+    if (!user) return c.json(NEEDS_ACCOUNT, 401)
+    const p = store.bySlug(c.req.param('slug'))
+    if (!p) return c.json({ error: 'no such product' }, 404)
+    return c.json({ deleted: service.deleteReview(p, user.id) })
+  })
+  app.post('/api/v1/products/:slug/share', async (c) => {
+    const p = live(c.req.param('slug'))
+    if (!p) return c.json({ error: 'no such product' }, 404)
+    const b = await body(c)
+    try {
+      if (!shareLimit.allow(`share:${ip(c)}`)) return c.json({ counted: false })
+      return c.json(service.share(p, apiUser(c), String(b.network ?? c.req.query('net') ?? '')))
     } catch (e) {
       return apiError(c, e)
     }
@@ -796,6 +1008,7 @@ export function configFromEnv(env: Record<string, string | undefined> = process.
     coinpay,
     featureUsd: Number(env.FEATURE_USD ?? 19),
     featureDays: Number(env.FEATURE_DAYS ?? 7),
+    karmaPerCredit: Number(env.KARMA_PER_CREDIT ?? 500) || 500,
     screenshots: env.BUILTINDIE_SCREENSHOTS !== 'off',
   }
 }
@@ -807,7 +1020,7 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   const media = new Media(env.BUILTINDIE_MEDIA ?? `${dataDir}/media`)
   const service = new BuiltIndie(store, media, { ...configFromEnv(env), claimSecret: env.BUILTINDIE_KEY })
   const mailer = env.RESEND_API_KEY ? resendMailer(env.RESEND_API_KEY, env.MAIL_FROM ?? 'built.indie <built@pit.world>') : consoleMailer
-  const app = createApp({ service, auth: new Auth(store, mailer), adminKey: env.BUILTINDIE_ADMIN_KEY, mailer })
+  const app = createApp({ service, auth: new Auth(store, mailer), adminKey: env.BUILTINDIE_ADMIN_KEY, mailer, coinpayOAuth: coinpayOAuthFromEnv(env) })
   const relays = (env.BUILTINDIE_RELAY_IPS ?? '23.95.228.174,127.0.0.1,::1').split(/[\s,]+/).filter(Boolean)
   startRingRefresh()
   startPitFooterRefresh('built.indie')

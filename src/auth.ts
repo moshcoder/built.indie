@@ -20,6 +20,8 @@ export type Mailer = (mail: Mail) => Promise<unknown>
 
 export function resendMailer(apiKey: string, from: string, fetchImpl: typeof fetch = fetch): Mailer {
   return async ({ to, subject, text, html }) => {
+    // A CoinPay-only member has a placeholder address (…@coinpay.invalid): there is nobody to mail.
+    if (to.endsWith('.invalid')) return
     const res = await fetchImpl('https://api.resend.com/emails', {
       method: 'POST',
       headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },

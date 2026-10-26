@@ -74,3 +74,11 @@ bun test
 Production runs on dev2 under `bin/install.sh` (OpenInstall); every merge to main deploys. See `OpenStack.md`.
 
 MIT. Part of the [Moshpit ring](https://pit.world/ring).
+
+## Karma (0.6.0)
+
+Signed-in members earn karma for launching (+10), upvoting (+1, 20 a day), reviewing (+5, stars and 30+ characters), commenting (+2, 10 a day), sharing (+1, 5 a day), claiming (+5), a verified badge (+5) and an invited maker who launches (+25); listing owners get +1 per upvote and +2 per review from members. Acting on your own listing earns nothing; admin imports earn nothing. Every 500 karma (`KARMA_PER_CREDIT`) grants a free Featured week, spent like an invite credit. The ledger is append-only (`karma_events`, dedupe key per fact; reversals are negative rows). `/leaderboard` shows the karma board (default) and the inviters board; `GET /api/v1/karma`, `GET /api/v1/leaderboard?board=karma&period=week`; CLI `karma`, `leaderboard`, `comment`, `review`; MCP `my_karma`, `leaderboard`, `comment`, `review`. Same rules as pwamart.com.
+
+## Sign in with CoinPay
+
+Set `COINPAY_OAUTH_CLIENT_ID` and `COINPAY_OAUTH_CLIENT_SECRET` (an OAuth client at coinpayportal.com with redirect `<origin>/api/v1/coinpay/callback`) and /login and /me show "Sign in with CoinPay" (OIDC, code + PKCE S256). Accounts link by CoinPay `sub` in `user_identities`, never by email.

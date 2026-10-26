@@ -5,7 +5,8 @@
  */
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import type { InviteStats, Maker, Product, User, Window } from './db.js'
+import type { InviteStats, Maker, Product, Review, User, Window } from './db.js'
+import type { KarmaSummary } from './karma.js'
 import { categorize, CATEGORY_LABELS, FACETS, isEmpty, queryString, SORTS, toggle, type Query, type Result } from './browse.js'
 import { pitFooter } from './pit-footer.js'
 import { RING_PLACEHOLDER } from './ring.js'
@@ -47,9 +48,12 @@ const ESC: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"
 export const esc = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (c) => ESC[c]!)
 const enc = encodeURIComponent
 
+/** The "Sign in with CoinPay" button: a plain link into the OAuth flow. */
+const coinpayButton = (next: string | null, label = 'Sign in with CoinPay') => `<a class="btn ghost wide coinpay-btn" href="/api/v1/coinpay/login${next ? `?next=${enc(next)}` : ''}">${icon('dollar')} ${esc(label)}</a>`
+
 const LOGO = `<svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 4 5 17h7v11h8V17h7z" fill="currentColor"/></svg>`
 
-export type Ctx = { origin: string; user?: User | null; voted?: (id: string) => boolean }
+export type Ctx = { origin: string; user?: User | null; voted?: (id: string) => boolean; /** Sign in with CoinPay is on. */ coinpay?: boolean }
 
 type LayoutOptions = { title: string; description: string; path: string; body: string; ctx: Ctx; noindex?: boolean; image?: string | null; head?: string; ads?: boolean; wide?: boolean; q?: string }
 
@@ -142,7 +146,7 @@ function row(ctx: Ctx, p: Product, rank?: number): string {
   <a class="row-main" href="/p/${esc(p.slug)}">
     ${logoImg(p)}
     <span class="row-text"><b>${esc(p.name)}</b>${p.verifiedAt ? ' <span class="tick" title="Links back to built.indie">✓</span>' : ''}<span class="muted">${esc(p.tagline || p.domain)}</span>
-    <span class="tags">${categorize(p).slice(0, 1).filter((c) => c !== 'other').map((c) => `<span class="tag cat">${esc(CATEGORY_LABELS[c])}</span>`).join('')}${p.tags.slice(0, 3).map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</span></span>
+    <span class="tags">${p.rating !== null ? `<span class="stars-mini" title="${p.rating} of 5 from ${p.reviews} review${p.reviews === 1 ? '' : 's'}">★ ${p.rating.toFixed(1)} <span class="muted">(${p.reviews})</span></span>` : ''}${categorize(p).slice(0, 1).filter((c) => c !== 'other').map((c) => `<span class="tag cat">${esc(CATEGORY_LABELS[c])}</span>`).join('')}${p.tags.slice(0, 3).map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</span></span>
   </a>
   ${voteButton(ctx, p)}
 </li>`
@@ -186,7 +190,30 @@ function invitePromo(ctx: Ctx, d: { inviters: InviterRow[]; featureDays: number;
 </section>`
 }
 
-export function homePage(ctx: Ctx, d: { today: Product[]; featured: Product[]; yesterday: Product[]; stats: { products: number; votes: number }; inviters: InviterRow[]; featureDays: number; featureUsd: number }): string {
+/** Karma rows: rank, public name, karma, badges. */
+function karmaList(rows: InviterRow[]): string {
+  return `<ol class="board inviters">${rows
+    .map((r) => `<li class="row-item"><span class="rank">${r.rank ?? ''}</span><a class="row-main" href="${esc(r.url)}"><span class="row-text"><b>${esc(r.name)}</b><span class="muted"><span class="karma">${r.value} karma</span> ${r.badges.map((b) => `<span title="${esc(b.label)}">${esc(b.emoji)}</span>`).join('')}</span></span></a></li>`)
+    .join('')}</ol>`
+}
+
+/** The "how to earn" table, wherever karma is explained. */
+export function howToEarnTable(rows: { action: string; points: number; rule: string }[]): string {
+  return `<table class="earn"><thead><tr><th scope="col">Do this</th><th scope="col">Karma</th><th scope="col">Rule</th></tr></thead><tbody>${rows.map((r) => `<tr><td>${esc(r.action)}</td><td class="pts">+${r.points}</td><td class="muted small">${esc(r.rule)}</td></tr>`).join('')}</tbody></table>`
+}
+
+function karmaPromo(ctx: Ctx, d: { karma: { period: 'week' | 'all'; rows: InviterRow[] }; featureDays: number }): string {
+  return `<section class="card invite-promo karma-promo" id="karma">
+  <div>
+    <h2>${icon('trophy')} Earn karma, get Featured free</h2>
+    <p class="muted">Launch, upvote, review, comment and share to earn karma. Every 500 karma is a free Featured week (${d.featureDays} days pinned on the homepage).</p>
+    <p class="row"><a class="btn small-btn" href="${ctx.user ? '/me#karma' : '/login?next=/me'}">${ctx.user ? 'Your karma' : 'Sign in to earn'}</a><a class="chip" href="/leaderboard">${icon('trophy')} Leaderboard</a></p>
+  </div>
+  <div><h3 class="mini-h">${d.karma.period === 'week' ? 'Top karma this week' : 'Top karma of all time'}</h3>${d.karma.rows.length ? karmaList(d.karma.rows) : `<p class="muted small">Nobody yet. <a href="${ctx.user ? '/top/today' : '/login?next=/top/today'}">Upvote a launch</a> and you top the board.</p>`}</div>
+</section>`
+}
+
+export function homePage(ctx: Ctx, d: { today: Product[]; featured: Product[]; yesterday: Product[]; stats: { products: number; votes: number }; inviters: InviterRow[]; karma: { period: 'week' | 'all'; rows: InviterRow[] }; featureDays: number; featureUsd: number }): string {
   return layout({
     ctx,
     title: 'built.indie: launch your indie product with one URL',
@@ -198,6 +225,7 @@ export function homePage(ctx: Ctx, d: { today: Product[]; featured: Product[]; y
   ${submitForm(true)}
   <p class="muted small">${d.stats.products} launched · ${d.stats.votes} upvotes · free, no sign-up to launch</p>
 </section>
+${karmaPromo(ctx, d)}
 ${invitePromo(ctx, d)}
 ${d.featured.length ? `<h2 class="section-h">Featured</h2>${board(ctx, d.featured, false)}` : ''}
 <h2 class="section-h">Launching today <span class="muted small">resets at 00:00 UTC</span></h2>
@@ -319,18 +347,81 @@ export function browsePage(ctx: Ctx, r: Result, d: { path: string; heading?: str
   })
 }
 
+/** Share intents. Each click sends a beacon to /p/<slug>/share?net=… first (app.js): a signed-in member earns karma. */
 function share(origin: string, p: Product): string {
   const url = `${origin}/p/${p.slug}`
   const text = `${p.name}: ${p.tagline || p.domain}. Launched on built.indie, upvote it 👇`
-  const links: [string, string][] = [
-    ['X', `https://x.com/intent/post?text=${enc(text)}&url=${enc(url)}`],
-    ['Bluesky', `https://bsky.app/intent/compose?text=${enc(`${text} ${url}`)}`],
-    ['LinkedIn', `https://www.linkedin.com/sharing/share-offsite/?url=${enc(url)}`],
-    ['Reddit', `https://www.reddit.com/submit?url=${enc(url)}&title=${enc(`${p.name}: ${p.tagline}`)}`],
-    ['Hacker News', `https://news.ycombinator.com/submitlink?u=${enc(p.url)}&t=${enc(`Show HN: ${p.name} – ${p.tagline}`)}`],
+  const links: [string, string, string, string][] = [
+    ['X', 'x', 'x', `https://x.com/intent/post?text=${enc(text)}&url=${enc(url)}`],
+    ['Bluesky', 'bluesky', 'bluesky', `https://bsky.app/intent/compose?text=${enc(`${text} ${url}`)}`],
+    ['Mastodon', 'mastodon', 'share', `https://mastodonshare.com/?text=${enc(text)}&url=${enc(url)}`],
+    ['LinkedIn', 'linkedin', 'linkedin', `https://www.linkedin.com/sharing/share-offsite/?url=${enc(url)}`],
+    ['Reddit', 'reddit', 'reddit', `https://www.reddit.com/submit?url=${enc(url)}&title=${enc(`${p.name}: ${p.tagline}`)}`],
+    ['Hacker News', 'hn', 'code', `https://news.ycombinator.com/submitlink?u=${enc(p.url)}&t=${enc(`Show HN: ${p.name} – ${p.tagline}`)}`],
   ]
-  const icons: Record<string, string> = { X: 'x', Bluesky: 'bluesky', LinkedIn: 'linkedin', Reddit: 'reddit', 'Hacker News': 'code' }
-  return `<div class="share">${links.map(([n, h]) => `<a class="chip" href="${esc(h)}" target="_blank" rel="noopener">${icon(icons[n] ?? 'share')} ${esc(n)}</a>`).join('')}<button class="chip" data-copy="${esc(url)}">${icon('link')} Copy link</button></div>`
+  return `<div class="share" data-share-slug="${esc(p.slug)}">${links.map(([n, net, ic, h]) => `<a class="chip" href="${esc(h)}" target="_blank" rel="noopener" data-share="${net}">${icon(ic)} ${esc(n)}</a>`).join('')}<button class="chip" data-copy="${esc(url)}" data-share="copy">${icon('link')} Copy link</button></div>`
+}
+
+/** A comment or review as the page shows it: the public name and karma, never the email. */
+export type CommentView = { id: string; parentId: string | null; body: string; deleted: boolean; at: number; author: string; karma: number; maker: boolean; mine: boolean }
+export type ReviewView = { rating: number; body: string; at: number; author: string; karma: number; mine: boolean }
+
+const when = (ms: number) => new Date(ms).toISOString().slice(0, 10)
+const stars = (n: number) => `<span class="stars" aria-label="${n} of 5 stars">${'★'.repeat(n)}<span class="off">${'★'.repeat(5 - n)}</span></span>`
+/** Paragraphs from plain text: escaped, line breaks kept. */
+const prose = (t: string) => t.split(/\n{2,}/).map((para) => `<p>${esc(para).replace(/\n/g, '<br>')}</p>`).join('')
+const byline = (name: string, karma: number, extra = '') => `<b class="who">${esc(name)}</b> <span class="karma" title="Karma">${karma} karma</span>${extra}`
+
+function reviewsHtml(ctx: Ctx, p: Product, reviews: ReviewView[], mine: Review | null, self: boolean): string {
+  const form = !ctx.user
+    ? `<p class="muted small"><a href="/login?next=${enc(`/p/${p.slug}#reviews`)}">Sign in</a> to review it (+5 karma for stars and a few sentences).</p>`
+    : self
+      ? '<p class="muted small">This is your listing: reviews come from everyone else.</p>'
+      : `<form method="post" action="/p/${esc(p.slug)}/review" class="review-form">
+  <fieldset class="rate"><legend>${mine ? 'Your review' : 'Rate it'}</legend>${[5, 4, 3, 2, 1].map((n) => `<input type="radio" id="rate-${n}" name="rating" value="${n}"${mine?.rating === n ? ' checked' : ''} required><label for="rate-${n}" title="${n} star${n === 1 ? '' : 's'}">★</label>`).join('')}</fieldset>
+  <label for="review-body" class="sr">Your review</label><textarea id="review-body" name="body" rows="3" maxlength="2000" placeholder="What is it like to use? (30 characters or more earns karma)">${esc(mine?.body ?? '')}</textarea>
+  <div class="row"><button class="btn small-btn">${mine ? 'Update review' : 'Post review'}</button>${mine ? '<button class="chip danger" name="action" value="delete" formnovalidate>Delete</button>' : ''}</div>
+</form>`
+  return `<section class="card discuss" id="reviews">
+  <h2 class="mini-h">${icon('star')} Reviews ${p.rating !== null ? `<span class="muted small">${stars(Math.round(p.rating))} ${p.rating.toFixed(1)} from ${p.reviews}</span>` : ''}</h2>
+  ${reviews.length ? `<ul class="thread">${reviews.map((r) => `<li class="post"><header>${stars(r.rating)} ${byline(r.author, r.karma, r.mine ? ' <span class="pill">you</span>' : '')} <time class="muted small" datetime="${new Date(r.at).toISOString()}">${when(r.at)}</time></header>${r.body ? `<div class="body">${prose(r.body)}</div>` : ''}</li>`).join('')}</ul>` : '<p class="muted small">No reviews yet.</p>'}
+  ${form}
+</section>`
+}
+
+function commentsHtml(ctx: Ctx, p: Product, comments: CommentView[]): string {
+  const top = comments.filter((c) => !c.parentId)
+  const replies = (id: string) => comments.filter((c) => c.parentId === id)
+  const del = (c: CommentView) => (c.mine && !c.deleted ? `<form method="post" action="/p/${esc(p.slug)}/comments/${esc(c.id)}/delete" class="inline" data-confirm="Delete this comment?"><button class="linkish small">delete</button></form>` : '')
+  const one = (c: CommentView) =>
+    c.deleted
+      ? `<article class="post deleted" id="c-${esc(c.id)}"><p class="muted small">[deleted]</p></article>`
+      : `<article class="post" id="c-${esc(c.id)}"><header>${byline(c.author, c.karma, c.maker ? ' <span class="pill ok">maker</span>' : '')} <a class="muted small" href="#c-${esc(c.id)}"><time datetime="${new Date(c.at).toISOString()}">${when(c.at)}</time></a> ${del(c)}</header><div class="body">${prose(c.body)}</div></article>`
+  const box = (parent?: string) =>
+    ctx.user
+      ? `<form method="post" action="/p/${esc(p.slug)}/comments" class="comment-form">${parent ? `<input type="hidden" name="parent" value="${esc(parent)}">` : ''}<label class="sr" for="cb-${parent ?? 'new'}">${parent ? 'Reply' : 'Comment'}</label><textarea id="cb-${parent ?? 'new'}" name="body" rows="${parent ? 2 : 3}" maxlength="2000" required placeholder="${parent ? 'Reply…' : 'Ask the maker something, or say what you think'}"></textarea><button class="${parent ? 'chip' : 'btn small-btn'}">${parent ? 'Reply' : 'Comment'}</button></form>`
+      : ''
+  return `<section class="card discuss" id="comments">
+  <h2 class="mini-h">${icon('user')} Comments <span class="muted small">${comments.filter((c) => !c.deleted).length}</span></h2>
+  ${top.length ? `<ol class="thread">${top.map((c) => `<li>${one(c)}${replies(c.id).length ? `<ol class="thread replies">${replies(c.id).map((r) => `<li>${one(r)}</li>`).join('')}</ol>` : ''}${ctx.user && !c.deleted ? `<details class="reply"><summary class="small">Reply</summary>${box(c.id)}</details>` : ''}</li>`).join('')}</ol>` : '<p class="muted small">No comments yet. Start the conversation.</p>'}
+  ${ctx.user ? box() : `<p class="muted small"><a href="/login?next=${enc(`/p/${p.slug}#comments`)}">Sign in</a> to comment (+2 karma).</p>`}
+</section>`
+}
+
+/** schema.org data for search engines; the rating only once someone has reviewed it. */
+function productJsonLd(origin: string, p: Product, reviews: ReviewView[]): string {
+  const data: Record<string, unknown> = {
+    '@context': 'https://schema.org',
+    '@type': 'SoftwareApplication',
+    name: p.name,
+    description: p.tagline || p.description || undefined,
+    url: p.url,
+    applicationCategory: 'WebApplication',
+    ...(cardImage(origin, p) ? { image: cardImage(origin, p) } : {}),
+    ...(p.rating !== null && p.reviews ? { aggregateRating: { '@type': 'AggregateRating', ratingValue: p.rating, reviewCount: p.reviews, bestRating: 5, worstRating: 1 } } : {}),
+    ...(reviews.length ? { review: reviews.slice(0, 5).map((r) => ({ '@type': 'Review', author: { '@type': 'Person', name: r.author }, reviewRating: { '@type': 'Rating', ratingValue: r.rating, bestRating: 5 }, ...(r.body ? { reviewBody: r.body } : {}), datePublished: when(r.at) })) } : {}),
+  }
+  return `<script type="application/ld+json">${JSON.stringify(data).replace(/</g, '\\u003c')}</script>`
 }
 
 export function badgeSnippet(origin: string, p: Product): string {
@@ -361,7 +452,7 @@ function pricingHtml(p: Product): string {
 
 const SOCIAL_LABELS: Record<string, string> = { x: 'X', github: 'GitHub', linkedin: 'LinkedIn', discord: 'Discord', youtube: 'YouTube', bluesky: 'Bluesky', instagram: 'Instagram', tiktok: 'TikTok', reddit: 'Reddit', telegram: 'Telegram', producthunt: 'Product Hunt', appstore: 'App Store', playstore: 'Google Play', chrome: 'Chrome Web Store' }
 
-export function productPage(ctx: Ctx, d: { product: Product; award: { day: string; rank: number } | null; maker: Maker | null; featuredOk?: boolean; featuredCredit?: boolean; launched?: boolean; canEdit?: boolean; credits?: number; buyerEmail?: string; featureUsd: number; featureDays: number; payments: boolean }): string {
+export function productPage(ctx: Ctx, d: { comments?: CommentView[]; reviews?: ReviewView[]; myReview?: Review | null; selfListing?: boolean; error?: string; product: Product; award: { day: string; rank: number } | null; maker: Maker | null; featuredOk?: boolean; featuredCredit?: boolean; launched?: boolean; canEdit?: boolean; credits?: number; buyerEmail?: string; featureUsd: number; featureDays: number; payments: boolean }): string {
   const p = d.product
   const shots = [p.screenshot, ...p.images, p.ogImage].filter((f): f is string => Boolean(f))
   const rel = p.verifiedAt ? 'noopener' : 'noopener nofollow ugc'
@@ -375,8 +466,8 @@ export function productPage(ctx: Ctx, d: { product: Product; award: { day: strin
     image: cardImage(ctx.origin, p),
     noindex: !live,
     ads: live,
-    head: `<link rel="opensite" href="/p/${esc(p.slug)}/opensite.json"><link rel="alternate" type="text/markdown" title="OpenProfile" href="/p/${esc(p.slug)}/openprofile.md">`,
-    body: `${d.launched && live ? `<div class="note launched"><b>🚀 ${esc(p.name)} is live.</b> Today’s board resets at midnight UTC: share it now. ${p.ownerId ? '' : `Is it yours? <a href="/p/${esc(p.slug)}/claim">Claim it</a> with your badge (or a DNS record) to edit it and get the ✓.`}</div>` : ''}
+    head: `<link rel="opensite" href="/p/${esc(p.slug)}/opensite.json"><link rel="alternate" type="text/markdown" title="OpenProfile" href="/p/${esc(p.slug)}/openprofile.md">${live ? productJsonLd(ctx.origin, p, d.reviews ?? []) : ''}`,
+    body: `${d.error ? `<p class="note error" role="alert">${esc(d.error)}</p>` : ''}${d.launched && live ? `<div class="note launched"><b>🚀 ${esc(p.name)} is live.</b> Today’s board resets at midnight UTC: share it now. ${p.ownerId ? '' : `Is it yours? <a href="/p/${esc(p.slug)}/claim">Claim it</a> with your badge (or a DNS record) to edit it and get the ✓.`}</div>` : ''}
 ${d.featuredOk ? '<p class="note">Thanks! Your payment is on its way; the Featured spot starts the moment CoinPay confirms it.</p>' : ''}
 ${d.featuredCredit ? `<p class="note launched">★ Featured for ${d.featureDays} more days with an invite credit. <a href="/invite">Invite another maker</a> to earn the next one.</p>` : ''}
 ${!live ? `<p class="note">${p.status === 'draft' ? 'Draft: only people with the edit link see this.' : 'Taken down.'}</p>` : ''}
@@ -385,7 +476,7 @@ ${!live ? `<p class="note">${p.status === 'draft' ? 'Draft: only people with the
   <div class="product-title">
     <h1>${esc(p.name)}</h1>
     <p class="lede">${esc(p.tagline)}</p>
-    <p class="badges">${awardText ? `<span class="pill gold">🏆 ${esc(awardText)}</span>` : ''}${p.featuredUntil && p.featuredUntil > Date.now() ? '<span class="pill">★ Featured</span>' : ''}${p.verifiedAt ? '<span class="pill ok" title="Their homepage links back to built.indie">✓ Verified</span>' : ''}${p.llms ? `<a class="pill" href="${esc(p.llms.url)}" rel="nofollow noopener">llms.txt</a>` : ''}${p.profile ? `<a class="pill" href="${esc(p.profile.url)}" rel="nofollow noopener">OpenProfile</a>` : ''}${p.record?.source === 'declared' ? '<span class="pill">OpenSite</span>' : ''}${p.extras.stack ? `<a class="pill" href="${esc(p.extras.stack.url)}" rel="nofollow noopener">OpenStack</a>` : ''}${p.extras.pricing ? `<a class="pill" href="${esc(p.extras.pricing.url)}" rel="nofollow noopener">OpenSaaS</a>` : ''}${p.extras.openicon ? `<a class="pill" href="${esc(p.extras.openicon)}" rel="nofollow noopener">OpenIcon</a>` : ''}</p>
+    <p class="badges">${awardText ? `<span class="pill gold">🏆 ${esc(awardText)}</span>` : ''}${p.featuredUntil && p.featuredUntil > Date.now() ? '<span class="pill">★ Featured</span>' : ''}${p.verifiedAt ? '<span class="pill ok" title="Their homepage links back to built.indie">✓ Verified</span>' : ''}${p.rating !== null ? `<a class="pill" href="#reviews">★ ${p.rating.toFixed(1)} · ${p.reviews} review${p.reviews === 1 ? '' : 's'}</a>` : ''}${p.llms ? `<a class="pill" href="${esc(p.llms.url)}" rel="nofollow noopener">llms.txt</a>` : ''}${p.profile ? `<a class="pill" href="${esc(p.profile.url)}" rel="nofollow noopener">OpenProfile</a>` : ''}${p.record?.source === 'declared' ? '<span class="pill">OpenSite</span>' : ''}${p.extras.stack ? `<a class="pill" href="${esc(p.extras.stack.url)}" rel="nofollow noopener">OpenStack</a>` : ''}${p.extras.pricing ? `<a class="pill" href="${esc(p.extras.pricing.url)}" rel="nofollow noopener">OpenSaaS</a>` : ''}${p.extras.openicon ? `<a class="pill" href="${esc(p.extras.openicon)}" rel="nofollow noopener">OpenIcon</a>` : ''}</p>
   </div>
   <div class="product-actions">
     ${live ? voteButton(ctx, p, true) : ''}
@@ -404,7 +495,9 @@ ${p.videos.length ? `<div class="videos">${p.videos.map((v) => (v.embed ? `<div 
   ${p.makerName || d.maker ? `<p class="maker">Made by ${d.maker ? `<a href="/makers/${esc(d.maker.id)}">${esc(p.makerName || d.maker.name)}</a>${p.makerVerified ? ' <span class="tick" title="Their OpenProfile names this product">✓</span>' : ''}` : esc(p.makerName)}</p>` : ''}
   <p class="muted small">Launched ${p.launchedAt ? new Date(p.launchedAt).toISOString().slice(0, 10) : 'soon'} · ${p.votes} upvote${p.votes === 1 ? '' : 's'} · <a href="/p/${esc(p.slug)}/opensite.json">OpenSite record</a> · <a href="/p/${esc(p.slug)}/openprofile.md">OpenProfile.md</a></p>
 </div>
-${live ? `<h2 class="section-h">Share it</h2>${share(ctx.origin, p)}
+${live ? `${reviewsHtml(ctx, p, d.reviews ?? [], d.myReview ?? null, Boolean(d.selfListing))}
+${commentsHtml(ctx, p, d.comments ?? [])}
+<h2 class="section-h">Share it</h2>${share(ctx.origin, p)}
 <details class="card" id="badge"${p.verifiedAt || !d.canEdit ? '' : ' open'}>
   <summary>Add the badge to your site</summary>
   <p class="muted">Put this on your homepage. It shows your live upvote count, and once we see it your link here becomes a followed link and you get the ✓.</p>
@@ -592,11 +685,23 @@ ${d.error ? `<p class="note error" role="alert">${esc(d.error)}</p>` : ''}
   <input type="hidden" name="next" value="${esc(d.next ?? '')}">
   <label for="email">Email</label><input id="email" name="email" type="email" autocomplete="email" required value="${esc(d.email ?? '')}">
   <p><button class="btn wide">Email me a link</button></p>
-</form>`}</section>`,
+</form>
+${ctx.coinpay ? `<p class="or muted small">or</p>${coinpayButton(d.next)}<p class="muted small">One CoinPay account signs you in here and on the rest of the network.</p>` : ''}`}</section>`,
   })
 }
 
-export function mePage(ctx: Ctx, d: { user: User; products: Product[]; apiKey?: string; invite: InviteStats }): string {
+function karmaCard(k: KarmaSummary, howToEarn: { action: string; points: number; rule: string }[], featureDays: number): string {
+  const pct = Math.round(k.progress * 100)
+  return `<div class="card" id="karma"><h2>${icon('trophy')} Karma <span class="karma-total">${k.total}</span></h2>
+<p class="muted">${k.week >= 0 ? `+${k.week}` : k.week} this week · ${k.credits.granted} free Featured week${k.credits.granted === 1 ? '' : 's'} earned from karma${k.credits.used ? ` (${k.credits.used} used)` : ''} · <a href="/leaderboard">leaderboard</a></p>
+<p><b>${k.nextCreditIn} karma</b> to your next free Featured week (${featureDays} days pinned on the homepage).</p>
+<div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="${k.perCredit}" aria-valuenow="${k.perCredit - k.nextCreditIn}" aria-label="Progress to the next free Featured week"><span style="inline-size:${pct}%"></span></div>
+${k.events.length ? `<h3 class="mini-h">History</h3><ol class="ledger">${k.events.map((e) => `<li><span class="pts${e.points < 0 ? ' neg' : ''}">${e.points > 0 ? '+' : ''}${e.points}</span> ${esc(e.label)} <time class="muted small" datetime="${new Date(e.at).toISOString()}">${when(e.at)}</time></li>`).join('')}</ol>` : '<p class="muted small">No karma yet. Here is how to earn it:</p>'}
+<details${k.events.length ? '' : ' open'}><summary>How to earn karma</summary>${howToEarnTable(howToEarn)}<p class="muted small">Signed-in members only; acting on your own listing earns nothing. Every ${k.perCredit} karma grants one free Featured week, once.</p></details>
+</div>`
+}
+
+export function mePage(ctx: Ctx, d: { user: User; products: Product[]; apiKey?: string; invite: InviteStats; karma?: KarmaSummary; howToEarn?: { action: string; points: number; rule: string }[]; featureDays?: number; coinpay?: { name: string | null } | null; emailless?: boolean; coinpayNote?: string | null }): string {
   return layout({
     ctx,
     title: 'Your launches · built.indie',
@@ -604,9 +709,12 @@ export function mePage(ctx: Ctx, d: { user: User; products: Product[]; apiKey?: 
     path: '/me',
     noindex: true,
     body: `<h1 class="page-h">Your launches</h1>
-<p class="muted">Signed in as ${esc(d.user.email)}. <form class="inline" method="post" action="/logout"><button class="linkish">Sign out</button></form></p>
+${d.coinpayNote ? `<p class="note">${esc(d.coinpayNote)}</p>` : ''}
+<p class="muted">Signed in ${d.emailless ? `with CoinPay${d.coinpay?.name ? ` as ${esc(d.coinpay.name)}` : ''}` : `as ${esc(d.user.email)}`}. <form class="inline" method="post" action="/logout"><button class="linkish">Sign out</button></form></p>
 ${d.products.length ? `<ol class="board">${d.products.map((p) => `<li class="row-item"><a class="row-main" href="/p/${esc(p.slug)}">${logoImg(p)}<span class="row-text"><b>${esc(p.name)}</b><span class="muted">${p.status === 'draft' ? 'draft' : `▲ ${p.votes}`} · ${p.ownerId === d.user.id ? 'claimed ✓' : 'submitted by you, not claimed'}</span></span></a><a class="chip" href="/p/${esc(p.slug)}/edit">Edit</a>${p.ownerId === d.user.id ? '' : `<a class="chip" href="/p/${esc(p.slug)}/claim">Claim</a>`}</li>`).join('')}</ol>` : '<p class="empty">Nothing yet. <a href="/submit">Launch something</a>, or open a listing that is yours and claim it.</p>'}
-<div class="card"><h2>${icon('star')} Invites</h2><p class="muted">${d.invite.invited} joined through your link · ${d.invite.launched} launched · <b>${d.invite.credits}</b> free Featured week${d.invite.credits === 1 ? '' : 's'} to use.</p><p><a class="chip" href="/invite">Your invite link and credits</a></p></div>
+${d.karma ? karmaCard(d.karma, d.howToEarn ?? [], d.featureDays ?? 7) : ''}
+<div class="card"><h2>${icon('star')} Invites</h2><p class="muted">${d.invite.invited} joined through your link · ${d.invite.launched} launched · <b>${d.invite.credits}</b> free Featured week${d.invite.credits === 1 ? '' : 's'} to use${d.invite.karmaCredits ? ` (${d.invite.karmaCredits} from karma)` : ''}.</p><p><a class="chip" href="/invite">Your invite link and credits</a></p></div>
+${ctx.coinpay || d.coinpay ? `<div class="card" id="signin"><h2>Sign in with CoinPay</h2>${d.coinpay ? `<p class="muted">Connected${d.coinpay.name ? ` (${esc(d.coinpay.name)})` : ''}: your CoinPay account signs you in here.</p>` : `<p class="muted">Connect your CoinPay account to sign in with it, here and across the network. We link the account itself, never by email.</p>${coinpayButton('/me', 'Connect CoinPay')}`}</div>` : ''}
 <div class="card" id="api"><h2>API key</h2>
 ${d.apiKey ? `<p class="note"><b>Copy it now</b>, we show it once. Making a new one retires this one.</p><div class="address"><code>${esc(d.apiKey)}</code><button class="copy" data-copy="${esc(d.apiKey)}">Copy</button></div><pre>export BUILTINDIE_KEY=${esc(d.apiKey)}</pre>` : '<p class="muted">For the CLI, the TUI and the MCP server: edit and claim from the terminal or an agent.</p>'}
 <form method="post" action="/me/key"><button class="chip">${d.apiKey ? 'Make another' : 'Make an API key'}</button></form></div>`,
@@ -637,7 +745,7 @@ export function helpPage(ctx: Ctx): string {
     description: 'Launch, read and upvote from code: a JSON API, a CLI, a TUI and an MCP server.',
     path: '/help',
     body: `<h1 class="page-h">Launch from anywhere</h1>
-<p class="muted">Everything on the site is an API. Launching and reading need nothing. To edit, sign in, claim your product by putting your badge on its homepage (or with a DNS record), and make an API key on <a href="/me">your page</a>.</p>
+<p class="muted">Everything on the site is an API. Launching and reading need nothing. To edit, sign in (an email link, or Sign in with CoinPay), claim your product by putting your badge on its homepage (or with a DNS record), and make an API key on <a href="/me">your page</a>.</p>
 <div class="card"><h2>API</h2>
 <pre>curl -X POST ${o}/api/v1/products -H 'content-type: application/json' \\
   -d '{"url":"yourproduct.com","maker_name":"You"}'
@@ -660,7 +768,15 @@ curl -X POST ${o}/api/v1/products/&lt;slug&gt;/publish -H 'authorization: Bearer
 curl ${o}/api/v1/invites -H 'authorization: Bearer bi_…'                 # your invite link and credits
 curl -X POST ${o}/api/v1/products/&lt;slug&gt;/credit -H 'authorization: Bearer bi_…'   # spend one: Featured for a week
 curl -X POST ${o}/api/v1/products/&lt;slug&gt;/feature -H 'authorization: Bearer bi_…' -d '{"email":"you@…"}'   # pay: a CoinPay checkout_url (any coin or PayPal)
-curl ${o}/leaderboard/invites.json?period=week                       # top inviters (all|week|month)</pre>
+curl ${o}/leaderboard/invites.json?period=week                       # top inviters (all|week|month)
+curl '${o}/api/v1/leaderboard?board=karma&amp;period=week'             # top karma (board karma|invites)
+curl ${o}/api/v1/karma -H 'authorization: Bearer bi_…'                   # your karma, history, next free Featured week
+curl ${o}/api/v1/products/&lt;slug&gt;/comments
+curl -X POST ${o}/api/v1/products/&lt;slug&gt;/comments -H 'authorization: Bearer bi_…' -d '{"body":"…","parent":"&lt;comment id, optional&gt;"}'
+curl -X DELETE ${o}/api/v1/comments/&lt;id&gt; -H 'authorization: Bearer bi_…'     # your own (the points go back)
+curl ${o}/api/v1/products/&lt;slug&gt;/reviews
+curl -X POST ${o}/api/v1/products/&lt;slug&gt;/reviews -H 'authorization: Bearer bi_…' -d '{"rating":5,"body":"…"}'
+curl -X POST ${o}/api/v1/products/&lt;slug&gt;/share -H 'authorization: Bearer bi_…' -d '{"network":"bluesky"}'   # x|bluesky|linkedin|reddit|hn|mastodon|copy</pre>
 <p class="muted small">Claiming, the easy way: the badge. <code>GET …/claim</code> answers a <code>badge</code> snippet next to the DNS <code>record</code>; put it on your homepage (<code>&lt;img src="${o}/images.svg?id=&lt;id&gt;"&gt;</code>, the id is yours for that listing) and the <code>POST</code> answers <code>{"claimed": true, "method": "badge"}</code>. It also earns the followed link and the ✓ in the same step.</p>
 <p class="muted small">OpenSite (logicsrc.com/docs/opensite): <code>GET /api/v1/sites?url=…</code>, <code>POST /api/v1/sites</code>, and every product at <code>/p/&lt;slug&gt;/opensite.json</code>. OpenProfile: <code>/p/&lt;slug&gt;/openprofile.md</code>, <code>/makers/&lt;id&gt;/openprofile.md</code>.</p></div>
 <div class="card" id="cli"><h2>CLI and TUI</h2>
@@ -674,10 +790,17 @@ bunx @profullstack/builtindie show &lt;slug&gt;
 bunx @profullstack/builtindie vote &lt;slug&gt;
 BUILTINDIE_KEY=bi_… bunx @profullstack/builtindie claim &lt;slug&gt;   # your badge (or a TXT record), then checks it
 BUILTINDIE_KEY=bi_… bunx @profullstack/builtindie invite          # your invite link and free Featured credits
+BUILTINDIE_KEY=bi_… bunx @profullstack/builtindie karma           # your karma and history
+bunx @profullstack/builtindie leaderboard [karma|invites] [--period week|month|all]
+BUILTINDIE_KEY=bi_… bunx @profullstack/builtindie comment &lt;slug&gt; "text" [--reply &lt;id&gt;]
+BUILTINDIE_KEY=bi_… bunx @profullstack/builtindie review &lt;slug&gt; 5 "text"
+bunx @profullstack/builtindie comments &lt;slug&gt; · reviews &lt;slug&gt;
 bunx @profullstack/builtindie preview any.site --json</pre></div>
 <div class="card" id="mcp"><h2>MCP</h2>
 <pre>claude mcp add builtindie -- bunx @profullstack/builtindie mcp</pre>
-<p class="muted">Tools: <code>launch_product</code>, <code>preview_site</code>, <code>list_products</code>, <code>get_product</code>, <code>upvote</code>, <code>search</code> (with filters and facets), <code>list_categories</code>, and with <code>BUILTINDIE_KEY</code>: <code>claim_product</code>, <code>edit_product</code>, <code>my_products</code>, <code>my_invites</code>, <code>feature_with_credit</code>.</p></div>
+<p class="muted">Tools: <code>launch_product</code>, <code>preview_site</code>, <code>list_products</code>, <code>get_product</code>, <code>upvote</code>, <code>search</code> (with filters and facets), <code>list_categories</code>, and with <code>BUILTINDIE_KEY</code>: <code>claim_product</code>, <code>edit_product</code>, <code>my_products</code>, <code>my_invites</code>, <code>feature_with_credit</code>, <code>my_karma</code>, <code>comment</code>, <code>review</code>; without a key: <code>leaderboard</code>, <code>list_comments</code>, <code>list_reviews</code>.</p></div>
+<div class="card" id="karma"><h2>Karma</h2><p class="muted">Signed-in members earn karma; anonymous actions still work and earn nothing. Acting on your own listing earns nothing. Every 500 karma grants one free Featured week. The same rules run on pwamart.com.</p>
+<table class="earn"><thead><tr><th scope="col">Do this</th><th scope="col">Karma</th></tr></thead><tbody><tr><td>Launch a listing</td><td class="pts">+10</td></tr><tr><td>Upvote (20 paid a day)</td><td class="pts">+1</td></tr><tr><td>Review: stars and 30+ characters</td><td class="pts">+5</td></tr><tr><td>Comment: 10+ characters (10 paid a day; deleting takes it back)</td><td class="pts">+2</td></tr><tr><td>Share button (once per listing, network and day; 5 a day)</td><td class="pts">+1</td></tr><tr><td>Your launch gets an upvote from a member</td><td class="pts">+1</td></tr><tr><td>Your launch gets a review</td><td class="pts">+2</td></tr><tr><td>Claim your listing</td><td class="pts">+5</td></tr><tr><td>An invited maker launches</td><td class="pts">+25</td></tr><tr><td>Badge verified on your homepage</td><td class="pts">+5</td></tr></tbody></table></div>
 <div class="card" id="bot"><h2>Our reader</h2>
 <p class="muted">We fetch only what a person submits, once, plus a re-read when the maker asks. User agent <code>built.indie/1.0</code>. We honour <code>robots.txt</code> and <code>index.allow: false</code> in <code>/.well-known/opensite.json</code>. Screenshots are taken with headless Chrome.</p></div>
 <div class="card"><h2>Make your page read well</h2>
@@ -757,19 +880,26 @@ ${
   })
 }
 
-/** The inviters' board in the site's layout; the widget is @profullstack/leaderboard's. */
-export function leaderboardPage(ctx: Ctx, d: { featureDays: number; featureUsd: number; me?: string | null }): string {
+/** The boards in the site's layout: karma (default) and inviters; the widget is @profullstack/leaderboard's. */
+export function leaderboardPage(ctx: Ctx, d: { board: 'karma' | 'invites'; period: 'week' | 'all'; featureDays: number; featureUsd: number; perCredit: number; howToEarn: { action: string; points: number; rule: string }[]; me?: string | null }): string {
+  const karma = d.board === 'karma'
+  const title = karma ? 'Top karma' : 'Top inviters'
+  const tabs = `<nav class="tabs" aria-label="Boards"><a href="/leaderboard"${karma ? ' aria-current="page"' : ''}>Karma</a><a href="/leaderboard?board=invites"${karma ? '' : ' aria-current="page"'}>Inviters</a></nav>`
+  const intro = karma ? `Members earn karma for launching, upvoting, reviewing, commenting and sharing. Every ${d.perCredit} karma is a free Featured week (${d.featureDays} days pinned on the homepage, a $${d.featureUsd} spot).` : inviteOffer(d.featureDays, d.featureUsd)
   return layout({
     ctx,
-    title: 'Top inviters · built.indie',
-    description: `The members who brought the most makers to built.indie. ${inviteOffer(d.featureDays, d.featureUsd)}`,
-    path: '/leaderboard',
+    title: `${title} · built.indie`,
+    description: karma ? `The most helpful members of built.indie. ${intro}` : `The members who brought the most makers to built.indie. ${intro}`,
+    path: karma ? '/leaderboard' : '/leaderboard?board=invites',
     ads: true,
-    head: '<link rel="alternate" type="application/rss+xml" title="Top inviters" href="/leaderboard/invites.xml?period=week">',
-    body: `<h1 class="page-h">${icon('trophy')} Top inviters</h1>
-<p class="muted">${esc(inviteOffer(d.featureDays, d.featureUsd))} <a href="/invite">Get your link</a>.</p>
-<div class="card"><div data-leaderboard></div><script src="/leaderboard/embed.js" data-board="invites" data-period="week" data-limit="25"${d.me ? ` data-me="${esc(d.me)}"` : ''}></script></div>
-<p class="muted small">Put this board on your site: <code>&lt;div data-leaderboard&gt;&lt;/div&gt;&lt;script src="${esc(ctx.origin)}/leaderboard/embed.js" data-board="invites"&gt;&lt;/script&gt;</code> · <a href="/leaderboard.json">JSON</a> · <a href="/leaderboard/invites.xml?period=week">RSS</a></p>`,
+    head: `<link rel="alternate" type="application/rss+xml" title="${title}" href="/leaderboard/${d.board}.xml?period=week">`,
+    body: `<h1 class="page-h">${icon('trophy')} ${title}</h1>
+${tabs}
+<p class="muted">${esc(intro)} ${karma ? `<a href="${ctx.user ? '/me#karma' : '/login?next=/me'}">${ctx.user ? 'Your karma' : 'Sign in to earn'}</a>` : '<a href="/invite">Get your link</a>'}</p>
+${d.period === 'all' ? '<p class="muted small">Nobody has scored this week yet, so this opens on all time. Be the first this week.</p>' : ''}
+<div class="card"><div data-leaderboard></div><script src="/leaderboard/embed.js" data-board="${d.board}" data-period="${d.period}" data-limit="25"${d.me ? ` data-me="${esc(d.me)}"` : ''}></script></div>
+${karma ? `<div class="card"><h2 class="mini-h">How to earn karma</h2>${howToEarnTable(d.howToEarn)}<p class="muted small">Signed-in members only; anonymous upvotes still count on the board but earn nothing. Acting on your own listing earns nothing.</p><p><a class="btn small-btn" href="/top/today">Upvote today’s launches</a></p></div>` : ''}
+<p class="muted small">Put this board on your site: <code>&lt;div data-leaderboard&gt;&lt;/div&gt;&lt;script src="${esc(ctx.origin)}/leaderboard/embed.js" data-board="${d.board}"&gt;&lt;/script&gt;</code> · <a href="/api/v1/leaderboard?board=${d.board}&amp;period=week">JSON</a> · <a href="/leaderboard/${d.board}.xml?period=week">RSS</a></p>`,
   })
 }
 

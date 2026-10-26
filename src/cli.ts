@@ -15,6 +15,12 @@
  *   builtindie invite                  your invite link and free Featured credits, BUILTINDIE_KEY
  *   builtindie credit <slug>           spend a credit: feature a listing you own, BUILTINDIE_KEY
  *   builtindie feature <slug>          pay to feature it: a CoinPay checkout link (any coin or PayPal), BUILTINDIE_KEY
+ *   builtindie karma                   your karma, history, next free Featured week, BUILTINDIE_KEY
+ *   builtindie leaderboard [karma|invites] [--period week|month|all]
+ *   builtindie comment <slug> "text"   comment on a launch (--reply <id>), BUILTINDIE_KEY
+ *   builtindie comments <slug>         read the comments
+ *   builtindie review <slug> <1-5> "text"   review a launch, BUILTINDIE_KEY
+ *   builtindie reviews <slug>          read the reviews
  *   builtindie edit <slug> --tagline … (BUILTINDIE_KEY)
  *   builtindie refetch <slug>          (BUILTINDIE_KEY)
  *   builtindie mcp                     MCP server on stdio
@@ -44,6 +50,13 @@ export const HELP = `builtindie ${VERSION}: launch your indie product with one U
   builtindie invite                   your invite link; each maker it brings in who launches = a free Featured week
   builtindie credit <slug>            spend a credit to feature a listing you own
   builtindie feature <slug> [--email you@x]  pay to feature it: prints a CoinPay checkout link (any coin or PayPal)
+  builtindie karma                    your karma, history and how far to the next free Featured week
+  builtindie leaderboard [karma|invites] [--period week|month|all]
+  builtindie comment <slug> "text"    comment on a launch (+2 karma); --reply <comment id> to answer one
+  builtindie comments <slug>          read a launch's comments
+  builtindie uncomment <id>           delete your comment (its karma goes back)
+  builtindie review <slug> <1-5> "text"   stars and words (+5 karma for 30+ characters)
+  builtindie reviews <slug>           read a launch's reviews
   builtindie edit <slug> [--name --tagline --description --tags a,b --video URL]
   builtindie refetch <slug>           read the homepage again
   builtindie publish <slug>           put a draft live
@@ -233,6 +246,46 @@ export async function main(argv = process.argv.slice(2), out: Out = console, cli
       case 'feature': {
         const r = await client.feature(rest[0] ?? '', str('email'))
         show(r, `Pay $${r.usd} for ${r.days} days Featured (${r.methods.join(', ')}):\n${r.checkout_url}`)
+        return 0
+      }
+      case 'karma': {
+        const r = await client.karma()
+        show(r, `${r.total} karma (${r.week >= 0 ? '+' : ''}${r.week} this week) · ${r.next_credit_in} to your next free Featured week · ${r.credits.earned} earned from karma\n\n${r.events.map((e) => `${(e.points > 0 ? '+' : '') + e.points}`.padStart(4) + `  ${e.label}  ${e.at.slice(0, 10)}`).join('\n') || 'No karma yet. How to earn:\n' + r.how_to_earn.map((h) => `  +${h.points}  ${h.action}: ${h.rule}`).join('\n')}`)
+        return 0
+      }
+      case 'leaderboard':
+      case 'board': {
+        const r = await client.leaderboard(rest[0] ?? 'karma', str('period') ?? 'week', Number(str('limit') ?? 25))
+        show(r, `${r.board === 'invites' ? 'Top inviters' : 'Top karma'} (${r.period})\n${r.rows.map((x) => `${String(x.rank ?? '').padStart(3)}. ${String(x.value).padStart(5)}  ${x.name} ${x.badges.map((b) => b.emoji).join('')}`).join('\n') || 'Nobody yet.'}\n${r.web}`)
+        return 0
+      }
+      case 'comment': {
+        const [slug, ...text] = rest
+        if (!slug || !text.length) throw new Error('builtindie comment <slug> "text" [--reply <comment id>]')
+        const r = await client.comment(slug, text.join(' '), str('reply'))
+        show(r, `Posted: ${r.comment.url}  (you have ${r.karma} karma)`)
+        return 0
+      }
+      case 'comments': {
+        const r = await client.comments(rest[0] ?? '')
+        show(r, r.comments.map((x) => `${x.parent ? '    ↳ ' : ''}${x.deleted ? '[deleted]' : `${x.author} (${x.karma} karma)${x.maker ? ' [maker]' : ''} ${x.at.slice(0, 10)}  #${x.id}\n${x.parent ? '      ' : '  '}${x.body}`}`).join('\n') || 'No comments yet.')
+        return 0
+      }
+      case 'uncomment': {
+        const r = await client.deleteComment(rest[0] ?? '')
+        show(r, 'Deleted.')
+        return 0
+      }
+      case 'review': {
+        const [slug, stars, ...text] = rest
+        if (!slug || !stars) throw new Error('builtindie review <slug> <1-5> "text"')
+        const r = await client.review(slug, Number(stars), text.join(' '))
+        show(r, `${'★'.repeat(r.review.rating)} saved. ${slug} is rated ${r.product.rating} from ${r.product.count}. You have ${r.karma} karma.`)
+        return 0
+      }
+      case 'reviews': {
+        const r = await client.reviews(rest[0] ?? '')
+        show(r, `${r.rating === null ? 'No reviews yet.' : `★ ${r.rating} from ${r.count}`}\n${r.reviews.map((x) => `${'★'.repeat(x.rating)}  ${x.author} (${x.karma} karma) ${x.at.slice(0, 10)}\n  ${x.body}`).join('\n')}`)
         return 0
       }
       case 'verify': {

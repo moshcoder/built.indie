@@ -1,4 +1,12 @@
 // built.indie: vote without a page load, copy buttons, progress while we read a site, the service worker.
+// A share button: tell the server before the share window opens (a signed-in member earns karma).
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-share]')
+  const slug = btn?.closest('[data-share-slug]')?.dataset.shareSlug
+  if (!btn || !slug) return
+  const url = '/p/' + encodeURIComponent(slug) + '/share?net=' + encodeURIComponent(btn.dataset.share)
+  if (!(navigator.sendBeacon && navigator.sendBeacon(url))) fetch(url, { method: 'POST', keepalive: true }).catch(() => {})
+}, true)
 document.addEventListener('click', async (e) => {
   const copy = e.target.closest('[data-copy]')
   if (copy) {
