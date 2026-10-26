@@ -826,3 +826,35 @@ describe('Featured via a CoinPay hosted checkout session', () => {
     expect(store.paymentBySession('cs_test1')).not.toBeNull()
   })
 })
+
+describe('signup profile (@profullstack/profile)', () => {
+  test('/signup asks for the fields, /login does not', async () => {
+    const { call } = setup()
+    const signup = await (await call('/signup')).text()
+    for (const name of ['first_name', 'last_name', 'company_domain', 'job_title', 'linkedin_url']) expect(signup).toContain(`name="${name}"`)
+    expect(signup.match(/name="email"/g)?.length).toBe(1)
+    expect(signup).toContain('/vendor-profile.js')
+    expect(await (await call('/login')).text()).not.toContain('name="first_name"')
+    expect((await call('/vendor-profile.js')).headers.get('content-type')).toContain('javascript')
+  })
+
+  test('a signup with the fields stores them once the link is spent', async () => {
+    const { call, mail, store } = setup()
+    const bad = await call('/login', form({ mode: 'signup', email: 'ada@acme.test', first_name: 'Ada' }))
+    expect(bad.status).toBe(400)
+    expect(await bad.text()).toContain('value="Ada"')
+    expect(mail).toHaveLength(0)
+    await call('/login', form({ mode: 'signup', email: 'Ada@Acme.test', first_name: 'Ada', last_name: 'Lovelace', company_domain: 'https://www.acme.test/about', job_title: 'CTO', linkedin_url: 'in/ada-lovelace' }))
+    const token = mail[0]!.text.match(/token=([\w-]+)/)![1]!
+    const cookie = (await call(`/auth/verify?token=${token}`)).headers.get('set-cookie')!.split(';')[0]!
+    const res = await call('/api/v1/me/profile', { headers: { cookie } })
+    expect(res.status).toBe(200)
+    expect((await res.json()).profile).toMatchObject({ email: 'ada@acme.test', first_name: 'Ada', last_name: 'Lovelace', company_domain: 'acme.test', job_title: 'CTO', linkedin_url: 'https://www.linkedin.com/in/ada-lovelace' })
+    expect(store.userByEmail('ada@acme.test')).not.toBeNull()
+    expect((await call('/api/v1/me/profile')).status).toBe(401)
+    // The /me form edits the same row.
+    const saved = await call('/me/profile', { ...form({ first_name: 'Ada', last_name: 'King', job_title: 'Countess' }), headers: { ...form({}).headers, cookie } })
+    expect(saved.headers.get('location')).toBe('/me?details=saved#details')
+    expect(await (await call('/me', { headers: { cookie } })).text()).toContain('value="King"')
+  })
+})

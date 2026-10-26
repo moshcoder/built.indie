@@ -12,6 +12,7 @@ import { pitFooter } from './pit-footer.js'
 import { RING_PLACEHOLDER } from './ring.js'
 import { ringFooter, ringFooterOptions, setRingFooterOptions } from './ring-footer.js'
 import { icon, SOCIAL_ICONS } from './icons.js'
+import { COLUMNS as PROFILE_COLUMNS, renderProfileFields } from '@profullstack/profile'
 
 export const REPO = 'https://github.com/moshcoder/built.indie'
 
@@ -670,22 +671,30 @@ ${d.result && !d.result.ok ? `<p class="note error" role="alert">We did not find
   })
 }
 
-export function loginPage(ctx: Ctx, d: { next: string | null; sent?: boolean; error?: string; email?: string; invitedBy?: string | null }): string {
+/** The shared profile fields (@profullstack/profile) beside the form's own email box. */
+const PROFILE_FIELDS = PROFILE_COLUMNS.filter((f) => f !== 'email')
+
+export function loginPage(ctx: Ctx, d: { next: string | null; sent?: boolean; error?: string; email?: string; invitedBy?: string | null; signup?: boolean; values?: Record<string, string>; errors?: Record<string, string> }): string {
+  const signup = Boolean(d.signup) && !d.sent
   return layout({
     ctx,
-    title: 'Sign in · built.indie',
-    description: 'Sign in with a link by email.',
-    path: '/login',
+    title: signup ? 'Create your account · built.indie' : 'Sign in · built.indie',
+    description: signup ? 'Create a built.indie account with a link by email.' : 'Sign in with a link by email.',
+    path: signup ? '/signup' : '/login',
     noindex: true,
-    body: `<section class="hero narrow"><h1>${d.sent ? 'Check your email' : 'Sign in'}</h1>
-${d.sent ? '<p class="lede">If that address can receive mail, a sign-in link is on its way. It works once, for 20 minutes.</p>' : `<p class="lede">No password. We email you a link; a new address makes an account. You need one only to claim and edit a listing. Launching is free and needs nothing.</p>
+    body: `<section class="hero narrow"><h1>${d.sent ? 'Check your email' : signup ? 'Create your account' : 'Sign in'}</h1>
+${d.sent ? '<p class="lede">If that address can receive mail, a sign-in link is on its way. It works once, for 20 minutes.</p>' : `<p class="lede">No password. We email you a link${signup ? '' : '; a new address makes an account'}. You need one only to claim and edit a listing. Launching is free and needs nothing.</p>
 ${d.invitedBy ? `<p class="note launched">${esc(d.invitedBy)} invited you. Sign up here, then launch your product: it is free, and it earns them a Featured week.</p>` : ''}
 ${d.error ? `<p class="note error" role="alert">${esc(d.error)}</p>` : ''}
 <form method="post" action="/login" class="card">
   <input type="hidden" name="next" value="${esc(d.next ?? '')}">
+  ${signup ? '<input type="hidden" name="mode" value="signup">' : ''}
   <label for="email">Email</label><input id="email" name="email" type="email" autocomplete="email" required value="${esc(d.email ?? '')}">
-  <p><button class="btn wide">Email me a link</button></p>
+  ${signup ? renderProfileFields({ fields: PROFILE_FIELDS, values: d.values, errors: d.errors }) : ''}
+  <p><button class="btn wide">${signup ? 'Create account' : 'Email me a link'}</button></p>
 </form>
+<p class="muted small">${signup ? `Already a member? <a href="/login${d.next ? `?next=${encodeURIComponent(d.next)}` : ''}">Sign in</a>` : `New here? <a href="/signup${d.next ? `?next=${encodeURIComponent(d.next)}` : ''}">Create an account</a>`}</p>
+${signup ? '<script src="/vendor-profile.js" defer></script>' : ''}
 ${ctx.coinpay ? `<p class="or muted small">or</p>${coinpayButton(d.next)}<p class="muted small">One CoinPay account signs you in here and on the rest of the network.</p>` : ''}`}</section>`,
   })
 }
@@ -701,7 +710,7 @@ ${k.events.length ? `<h3 class="mini-h">History</h3><ol class="ledger">${k.event
 </div>`
 }
 
-export function mePage(ctx: Ctx, d: { user: User; products: Product[]; apiKey?: string; invite: InviteStats; karma?: KarmaSummary; howToEarn?: { action: string; points: number; rule: string }[]; featureDays?: number; coinpay?: { name: string | null } | null; emailless?: boolean; coinpayNote?: string | null }): string {
+export function mePage(ctx: Ctx, d: { user: User; products: Product[]; apiKey?: string; invite: InviteStats; karma?: KarmaSummary; howToEarn?: { action: string; points: number; rule: string }[]; featureDays?: number; coinpay?: { name: string | null } | null; emailless?: boolean; coinpayNote?: string | null; profile?: object | null; detailsNote?: string | null; detailsError?: boolean; detailsErrors?: Record<string, string> }): string {
   return layout({
     ctx,
     title: 'Your launches · built.indie',
@@ -715,6 +724,9 @@ ${d.products.length ? `<ol class="board">${d.products.map((p) => `<li class="row
 ${d.karma ? karmaCard(d.karma, d.howToEarn ?? [], d.featureDays ?? 7) : ''}
 <div class="card"><h2>${icon('star')} Invites</h2><p class="muted">${d.invite.invited} joined through your link · ${d.invite.launched} launched · <b>${d.invite.credits}</b> free Featured week${d.invite.credits === 1 ? '' : 's'} to use${d.invite.karmaCredits ? ` (${d.invite.karmaCredits} from karma)` : ''}.</p><p><a class="chip" href="/invite">Your invite link and credits</a></p></div>
 ${ctx.coinpay || d.coinpay ? `<div class="card" id="signin"><h2>Sign in with CoinPay</h2>${d.coinpay ? `<p class="muted">Connected${d.coinpay.name ? ` (${esc(d.coinpay.name)})` : ''}: your CoinPay account signs you in here.</p>` : `<p class="muted">Connect your CoinPay account to sign in with it, here and across the network. We link the account itself, never by email.</p>${coinpayButton('/me', 'Connect CoinPay')}`}</div>` : ''}
+<div class="card" id="details"><h2>Your details</h2><p class="muted small">Private to your account, never shown on a public page.</p>
+${d.detailsNote ? `<p class="note${d.detailsError ? ' error' : ''}" role="status">${esc(d.detailsNote)}</p>` : ''}
+<form method="post" action="/me/profile">${renderProfileFields({ fields: PROFILE_FIELDS, values: (d.profile ?? {}) as Record<string, string | null>, errors: d.detailsErrors, idPrefix: 'details-' })}<p><button class="chip">Save details</button></p></form></div>
 <div class="card" id="api"><h2>API key</h2>
 ${d.apiKey ? `<p class="note"><b>Copy it now</b>, we show it once. Making a new one retires this one.</p><div class="address"><code>${esc(d.apiKey)}</code><button class="copy" data-copy="${esc(d.apiKey)}">Copy</button></div><pre>export BUILTINDIE_KEY=${esc(d.apiKey)}</pre>` : '<p class="muted">For the CLI, the TUI and the MCP server: edit and claim from the terminal or an agent.</p>'}
 <form method="post" action="/me/key"><button class="chip">${d.apiKey ? 'Make another' : 'Make an API key'}</button></form></div>`,

@@ -257,3 +257,8 @@ table.earn td.pts { color: var(--gold); font-weight: 700; white-space: nowrap; }
 @media (max-width: 640px) { table.earn td:nth-child(3) { display: block; padding-top: 0; border: 0; } }
 .or { text-align: center; margin: .6rem 0; }
 .coinpay-btn { display: flex; justify-content: center; gap: .4rem; }
+
+/* The shared profile fields (@profullstack/profile renderProfileFields), made to read like the email box beside them. */
+.pfs-profile { border: 0; margin: 0; padding: 0; min-width: 0; }
+.pfs-profile__optional { color: var(--muted); font-weight: 400; }
+.pfs-profile__error { color: var(--fail); font-size: 0.85rem; margin: 0.25rem 0 0; }
