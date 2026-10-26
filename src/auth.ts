@@ -50,7 +50,7 @@ export class Auth {
   constructor(private store: Store, private mailer: Mailer, private now = () => Date.now()) {}
 
   /** Always resolves the same way, so nobody learns who has an account. */
-  async sendLink(emailInput: string, next: string | null, base: string, ref: string | null = null): Promise<boolean> {
+  async sendLink(emailInput: string, next: string | null, base: string, ref: string | null = null, profile: object | null = null): Promise<boolean> {
     const email = validEmail(emailInput)
     if (!email) return false
     const db = this.store.db
@@ -58,7 +58,7 @@ export class Auth {
     if (recent >= 5) return true
     const token = randomBytes(24).toString('base64url')
     // The invite code rides in the link, so it counts even when the mail opens in another browser.
-    db.query('INSERT INTO magic_links (token_hash, email, next, ref, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)').run(hashKey(token), email, safeNext(next), ref ? String(ref).slice(0, 32) : null, this.now(), this.now() + LINK_MINUTES * 60_000)
+    db.query('INSERT INTO magic_links (token_hash, email, next, ref, created_at, expires_at, profile) VALUES (?, ?, ?, ?, ?, ?, ?)').run(hashKey(token), email, safeNext(next), ref ? String(ref).slice(0, 32) : null, this.now(), this.now() + LINK_MINUTES * 60_000, profile ? JSON.stringify(profile) : null)
     const url = `${base}/auth/verify?token=${token}`
     const text = `Sign in to built.indie:\n\n${url}\n\nThe link works once, for ${LINK_MINUTES} minutes. If you did not ask for it, ignore this email.`
     const html = `<p>Sign in to <strong>built.indie</strong>:</p><p><a href="${url}" style="display:inline-block;padding:10px 18px;background:#ff5c39;color:#fff;border-radius:8px;text-decoration:none;font-weight:700">Sign in</a></p><p style="color:#666;font-size:13px">Or open ${url}<br>The link works once, for ${LINK_MINUTES} minutes. If you did not ask for it, ignore this email.</p>`
@@ -70,15 +70,15 @@ export class Auth {
     return true
   }
 
-  /** One use, then it is gone. Returns the user (made on first sign-in, `created`), where to go, and the invite code it carried. */
-  consumeLink(token: string): { user: User; next: string | null; created: boolean; ref: string | null } | null {
+  /** One use, then it is gone. Returns the user (made on first sign-in, `created`), where to go, the invite code it carried, and the signup form's profile fields. */
+  consumeLink(token: string): { user: User; next: string | null; created: boolean; ref: string | null; profile: Record<string, unknown> | null } | null {
     const hash = hashKey(String(token))
     const db = this.store.db
-    const row = db.query('SELECT email, next, ref, expires_at FROM magic_links WHERE token_hash = ?').get(hash) as { email: string; next: string | null; ref: string | null; expires_at: number } | null
+    const row = db.query('SELECT email, next, ref, expires_at, profile FROM magic_links WHERE token_hash = ?').get(hash) as { email: string; next: string | null; ref: string | null; expires_at: number; profile: string | null } | null
     db.query('DELETE FROM magic_links WHERE token_hash = ? OR expires_at < ?').run(hash, this.now())
     if (!row || row.expires_at < this.now()) return null
     const created = !this.store.userByEmail(row.email)
-    return { user: this.store.findOrCreateUser(row.email), next: row.next, created, ref: row.ref }
+    return { user: this.store.findOrCreateUser(row.email), next: row.next, created, ref: row.ref, profile: row.profile ? JSON.parse(row.profile) : null }
   }
 
   createSession(userId: string): string {

@@ -26,6 +26,8 @@ import { BuiltIndie, CLAIM_LABEL, CLAIM_PREFIX, InputError, type Config, type Ed
 import { autofetch, FetchError } from './fetch.js'
 import { COINPAY_ERRORS, coinpayOAuthFromEnv, isPlaceholder, mountCoinPaySignin, PROVIDER as COINPAY, type CoinPayOAuth } from './coinpay-signin.js'
 import { VERSION } from './version.js'
+import { mountProfileRoutes, PROFILE_ENHANCE_SCRIPT, saveSignupProfile, validateProfile } from '@profullstack/profile'
+import { openProfiles } from './profile.js'
 
 export { VERSION }
 
@@ -89,6 +91,8 @@ export function createApp(deps: Deps) {
   const commentLimit = new Limiter(10, 10 * 60_000)
   const shareLimit = new Limiter(60, 10 * 60_000)
   const origin = config.origin
+  // The shared profile fields (profile.ts); user_profiles is created as the app starts.
+  const profiles = openProfiles(store.db)
 
   const direct = (c: Context) => visitorOnMoshpit(SELF, c.req.header('host'), c.req.header('x-moshpit-name'))
   const ip = (c: Context<Env>) => c.env?.ip ?? 'local'
@@ -361,6 +365,9 @@ export function createApp(deps: Deps) {
     return inviter && !sessionUser(c) ? store.publicName(inviter) : null
   }
   app.get('/login', (c) => page(c, loginPage(ctxOf(c), { next: safeNext(c.req.query('next')), invitedBy: invitedBy(c), error: COINPAY_ERRORS[c.req.query('error') ?? ''] })))
+  // Creating an account asks for the shared profile fields; plain sign-in never does.
+  app.get('/signup', (c) => page(c, loginPage(ctxOf(c), { next: safeNext(c.req.query('next')), invitedBy: invitedBy(c), signup: true })))
+  app.get('/vendor-profile.js', (c) => c.body(PROFILE_ENHANCE_SCRIPT, 200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'public, max-age=86400' }))
   // Sign in with CoinPay (coinpay-signin.ts): /api/v1/coinpay/login and /callback.
   mountCoinPaySignin(app, {
     store,
@@ -378,11 +385,19 @@ export function createApp(deps: Deps) {
   app.post('/login', async (c) => {
     const form = (await c.req.parseBody()) as Record<string, string>
     const next = safeNext(form.next)
-    if (!validEmail(form.email)) return page(c, loginPage(ctxOf(c), { next, error: 'That does not look like an email address.', email: form.email }), 400)
-    if (!crossSite(c) && readLimit.allow(`mail:${ip(c)}`)) await deps.auth.sendLink(form.email ?? '', next, here(c), getCookie(c, REF_COOKIE) ?? null)
+    const signup = form.mode === 'signup'
+    if (!validEmail(form.email)) return page(c, loginPage(ctxOf(c), { next, error: 'That does not look like an email address.', email: form.email, signup, values: form }), 400)
+    // The signup fields are checked before any link exists; they ride on the link and are saved on verify.
+    let profile: object | null = null
+    if (signup) {
+      const check = validateProfile(form)
+      if (!check.ok) return page(c, loginPage(ctxOf(c), { next, error: 'Some fields need fixing.', email: form.email, signup, values: form, errors: check.errors }), 400)
+      profile = check.profile
+    }
+    if (!crossSite(c) && readLimit.allow(`mail:${ip(c)}`)) await deps.auth.sendLink(form.email ?? '', next, here(c), getCookie(c, REF_COOKIE) ?? null, profile)
     return page(c, loginPage(ctxOf(c), { next, sent: true }))
   })
-  app.get('/auth/verify', (c) => {
+  app.get('/auth/verify', async (c) => {
     const r = deps.auth.consumeLink(c.req.query('token') ?? '')
     if (!r) return page(c, messagePage(ctxOf(c), { title: 'That link is used up', message: 'Sign-in links work once, for 20 minutes. Ask for a new one.' }), 400)
     setCookie(c, SESSION_COOKIE, deps.auth.createSession(r.user.id), { httpOnly: true, secure: secure(c), sameSite: 'Lax', path: '/', maxAge: 90 * 86400 })
@@ -390,6 +405,8 @@ export function createApp(deps: Deps) {
     const ref = r.ref ?? getCookie(c, REF_COOKIE)
     if (r.created && ref) store.recordInvite(r.user.id, ref)
     if (ref) deleteCookie(c, REF_COOKIE, { path: '/' })
+    // The signup form's fields, now that the account exists. A failure never costs the sign-in: /me asks again.
+    if (r.profile) await saveSignupProfile(await profiles.ready, r.user.id, r.profile, { email: r.user.email }).catch((error) => console.error(`[auth] signup profile save failed: ${(error as Error).message}`))
     return c.redirect(r.next ?? '/me')
   })
   app.post('/logout', (c) => {
@@ -402,9 +419,21 @@ export function createApp(deps: Deps) {
     emailless: isPlaceholder(user.email),
     coinpayNote: ({ connected: 'CoinPay is connected: sign in with it next time.', taken: 'That CoinPay account is already linked to another built.indie member.', welcome: 'Welcome! You signed in with CoinPay.' } as Record<string, string>)[c.req.query('coinpay') ?? ''] ?? null,
   })
-  app.get('/me', (c) => {
+  app.get('/me', async (c) => {
     const user = sessionUser(c)
-    return user ? page(c, mePage(ctxOf(c), { user, products: store.mine(user.id), invite: store.inviteStats(user.id), karma: service.karma.summary(user.id), howToEarn: HOW_TO_EARN, featureDays: config.featureDays, ...signinInfo(c, user) })) : toLogin(c)
+    return user ? page(c, mePage(ctxOf(c), { user, products: store.mine(user.id), invite: store.inviteStats(user.id), karma: service.karma.summary(user.id), howToEarn: HOW_TO_EARN, featureDays: config.featureDays, ...signinInfo(c, user), profile: await (await profiles.ready).get(user.id), detailsNote: c.req.query('details') === 'saved' ? 'Your details are saved.' : null })) : toLogin(c)
+  })
+  // The shared profile (@profullstack/profile): the /me form, and GET/PUT/PATCH /api/v1/me/profile for a session or an API key.
+  app.post('/me/profile', async (c) => {
+    const user = sessionUser(c)
+    if (!user) return toLogin(c)
+    if (crossSite(c)) return c.redirect('/me')
+    const form = (await c.req.parseBody()) as Record<string, string>
+    const email = isPlaceholder(user.email) ? null : user.email
+    const check = validateProfile({ ...form, email }, { required: ['first_name', 'last_name'] })
+    if (!check.ok) return page(c, mePage(ctxOf(c), { user, products: store.mine(user.id), invite: store.inviteStats(user.id), karma: service.karma.summary(user.id), howToEarn: HOW_TO_EARN, featureDays: config.featureDays, ...signinInfo(c, user), profile: form, detailsNote: 'Some fields need fixing.', detailsError: true, detailsErrors: check.errors }), 400)
+    await (await profiles.ready).save(user.id, check.profile)
+    return c.redirect('/me?details=saved#details')
   })
   app.post('/me/key', (c) => {
     const user = sessionUser(c)
@@ -834,6 +863,13 @@ export function createApp(deps: Deps) {
     if (!readLimit.allow(`read:${ip(c)}`)) return c.json({ error: 'too many checks; wait a few minutes' }, 429)
     const r = await service.claim(p, user)
     return c.json({ claimed: r.ok, ...(r.method ? { method: r.method } : {}), looked: r.looked, record: claimRecord(p, user), badge: claimBadge(p, user), ...(r.ok ? {} : { markdown: claimMd(p, user) }) })
+  })
+  mountProfileRoutes(app, {
+    store: profiles.store,
+    getUser: (_req: Request, c: Context) => {
+      const user = sessionUser(c) ?? apiUser(c)
+      return user ? { id: user.id, email: isPlaceholder(user.email) ? null : user.email } : null
+    },
   })
   app.get('/api/v1/me', (c) => {
     const user = apiUser(c)

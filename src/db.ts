@@ -257,6 +257,8 @@ export class Store {
     const has = (table: string, col: string) => (this.db.query(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((c) => c.name === col)
     if (!has('users', 'display_name')) this.db.exec('ALTER TABLE users ADD COLUMN display_name TEXT')
     if (!has('magic_links', 'ref')) this.db.exec('ALTER TABLE magic_links ADD COLUMN ref TEXT')
+    // The signup form's profile fields ride on the link until it is spent (profile.ts saves them).
+    if (!has('magic_links', 'profile')) this.db.exec('ALTER TABLE magic_links ADD COLUMN profile TEXT')
     // Hosted checkout sessions (0.5.0): the session is how CoinPay's webhook finds the row.
     for (const col of ['checkout_session_id', 'customer_email', 'account_id', 'payment_id']) if (!has('payments', col)) this.db.exec(`ALTER TABLE payments ADD COLUMN ${col} TEXT`)
     // Karma (0.6.0): who cast a vote, when they were signed in; review totals beside the vote count.
