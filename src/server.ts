@@ -22,7 +22,7 @@ import { HOW_TO_EARN, SHARE_NETWORKS } from './karma.js'
 import { IMAGE_TYPES, Media } from './media.js'
 import { startPitFooterRefresh } from './pit-footer.js'
 import { RING_PLACEHOLDER, ringBar, startRingRefresh, visitorOnMoshpit } from './ring.js'
-import { BuiltIndie, CLAIM_LABEL, CLAIM_PREFIX, InputError, type Config, type Edit } from './service.js'
+import { BuiltIndie, CLAIM_LABEL, CLAIM_PREFIX, INVITE_BONUS_DAYS, INVITES_PER_PERSON, InputError, type Config, type Edit } from './service.js'
 import { autofetch, FetchError } from './fetch.js'
 import { COINPAY_ERRORS, coinpayOAuthFromEnv, isPlaceholder, mountCoinPaySignin, PROVIDER as COINPAY, type CoinPayOAuth } from './coinpay-signin.js'
 import { VERSION } from './version.js'
@@ -61,6 +61,10 @@ export type Deps = { service: BuiltIndie; auth: Auth; adminKey?: string; secureC
 
 /** The invite code from /i/<code>, kept until the visitor signs up (it also rides in the magic link). */
 const REF_COOKIE = 'bi_ref'
+/** A scarce single-use invite code (INV-XXXX-XXXX-XXXX) from /i/<code>, kept until the visitor signs up. */
+const INVITE_COOKIE = 'bi_invite'
+/** An @profullstack/affiliates invite code, as opposed to a member's open invite-link code. */
+const isInviteCode = (code: string | null | undefined): code is string => Boolean(code && /^INV-?[0-9A-Z]{4}-?[0-9A-Z]{4}-?[0-9A-Z]{4}$/i.test(code.trim()))
 type Env = { Bindings: { ip?: string } }
 
 /** A small fixed-window limit per key, in memory: enough to stop a loop, not a fortress. */
@@ -90,6 +94,7 @@ export function createApp(deps: Deps) {
   const voteLimit = new Limiter(60, 10 * 60_000)
   const commentLimit = new Limiter(10, 10 * 60_000)
   const shareLimit = new Limiter(60, 10 * 60_000)
+  const redeemLimit = new Limiter(10, 10 * 60_000)
   const origin = config.origin
   // The shared profile fields (profile.ts); user_profiles is created as the app starts.
   const profiles = openProfiles(store.db)
@@ -156,6 +161,14 @@ export function createApp(deps: Deps) {
   app.use('*', async (c, next) => {
     await next()
     if (!c.res.headers.has('content-security-policy')) for (const [k, v] of Object.entries(SECURITY_HEADERS)) c.header(k, v)
+  })
+
+  // ?ref=<a member's invite code> on any page is their invite link too: the same bi_ref cookie
+  // /i/<code> sets, first touch wins, so one sign-up is counted once, in one place (the invites table).
+  app.use('*', async (c, next) => {
+    const ref = c.req.query('ref')
+    if (ref && ref.length <= 40 && !getCookie(c, REF_COOKIE) && store.inviterOf(ref) && !sessionUser(c)) setCookie(c, REF_COOKIE, ref, { httpOnly: true, secure: secure(c), sameSite: 'Lax', path: '/', maxAge: 30 * 86400 })
+    await next()
   })
 
   app.get('/health', (c) => c.json({ ok: true, version: VERSION }))
@@ -247,7 +260,7 @@ export function createApp(deps: Deps) {
     const rv = (x: Review): ReviewView => ({ rating: x.rating, body: x.body, at: x.updatedAt, author: who(x.userId), karma: karmaOf.get(x.userId) ?? 0, mine: Boolean(me && x.userId === me.id) })
     return { comments: comments.map(cv), reviews: reviews.map(rv), myReview: me ? store.review(p.id, me.id) : null }
   }
-  const productView = (c: Context<Env>, p: Product, extra: { error?: string } = {}, status = 200) =>
+  const productView = async (c: Context<Env>, p: Product, extra: { error?: string } = {}, status = 200) =>
     page(
       c,
       productPage(ctxOf(c), {
@@ -262,6 +275,11 @@ export function createApp(deps: Deps) {
         maker: p.makerId ? store.maker(p.makerId) : null,
         featuredOk: c.req.query('featured') === '1',
         featuredCredit: c.req.query('featured') === 'credit',
+        featuredDaysUsed: c.req.query('featured') === 'days',
+        daysBalance: await (async () => {
+          const u = sessionUser(c)
+          return u && store.canEdit(p, u) ? service.featuredDays(u) : 0
+        })(),
         launched: c.req.query('launched') === '1',
         canEdit: store.canEdit(p, sessionUser(c)),
         credits: (() => {
@@ -359,6 +377,20 @@ export function createApp(deps: Deps) {
     return claimView(c, store.product(p.id)!, user, { result })
   })
 
+  /**
+   * A new member: a scarce invite code (bi_invite) gives both people Featured days, and an
+   * invite link (bi_ref, /i/<code> or ?ref=) makes their first live listing earn the inviter a credit.
+   * Both write the same invites row, first one wins, so a sign-up is counted once.
+   */
+  const joined = async (c: Context, user: User, carried: string | null) => {
+    const parts = (carried ?? '').split(' ').filter(Boolean)
+    const invite = parts.find(isInviteCode) ?? getCookie(c, INVITE_COOKIE)
+    const ref = parts.find((x) => !isInviteCode(x)) ?? getCookie(c, REF_COOKIE)
+    if (invite) await service.acceptInvite(invite, user).catch((e) => console.error(`[invite] accept failed: ${(e as Error).message}`))
+    if (ref) store.recordInvite(user.id, ref)
+    for (const name of [REF_COOKIE, INVITE_COOKIE]) deleteCookie(c, name, { path: '/' })
+  }
+
   // Signing in: an emailed link, which is also sign-up.
   const invitedBy = (c: Context) => {
     const inviter = store.inviterOf(getCookie(c, REF_COOKIE) ?? '')
@@ -377,10 +409,7 @@ export function createApp(deps: Deps) {
     secure,
     sessionUser,
     // A new member who came through an invite link counts, as with a magic link.
-    onNewMember: (c, user) => {
-      const ref = getCookie(c, REF_COOKIE)
-      if (ref) store.recordInvite(user.id, ref), deleteCookie(c, REF_COOKIE, { path: '/' })
-    },
+    onNewMember: (c, user) => void joined(c, user, null),
   })
   app.post('/login', async (c) => {
     const form = (await c.req.parseBody()) as Record<string, string>
@@ -394,17 +423,16 @@ export function createApp(deps: Deps) {
       if (!check.ok) return page(c, loginPage(ctxOf(c), { next, error: 'Some fields need fixing.', email: form.email, signup, values: form, errors: check.errors }), 400)
       profile = check.profile
     }
-    if (!crossSite(c) && readLimit.allow(`mail:${ip(c)}`)) await deps.auth.sendLink(form.email ?? '', next, here(c), getCookie(c, REF_COOKIE) ?? null, profile)
+    // The invites ride in the link (space-separated), so opening it in another browser still counts.
+    if (!crossSite(c) && readLimit.allow(`mail:${ip(c)}`)) await deps.auth.sendLink(form.email ?? '', next, here(c), [getCookie(c, INVITE_COOKIE), getCookie(c, REF_COOKIE)].filter(Boolean).join(' ') || null, profile)
     return page(c, loginPage(ctxOf(c), { next, sent: true }))
   })
   app.get('/auth/verify', async (c) => {
     const r = deps.auth.consumeLink(c.req.query('token') ?? '')
     if (!r) return page(c, messagePage(ctxOf(c), { title: 'That link is used up', message: 'Sign-in links work once, for 20 minutes. Ask for a new one.' }), 400)
     setCookie(c, SESSION_COOKIE, deps.auth.createSession(r.user.id), { httpOnly: true, secure: secure(c), sameSite: 'Lax', path: '/', maxAge: 90 * 86400 })
-    // A new member who came through an invite link: their first live listing will earn the inviter a credit.
-    const ref = r.ref ?? getCookie(c, REF_COOKIE)
-    if (r.created && ref) store.recordInvite(r.user.id, ref)
-    if (ref) deleteCookie(c, REF_COOKIE, { path: '/' })
+    if (r.created) await joined(c, r.user, r.ref ?? null)
+    else for (const name of [REF_COOKIE, INVITE_COOKIE]) deleteCookie(c, name, { path: '/' })
     // The signup form's fields, now that the account exists. A failure never costs the sign-in: /me asks again.
     if (r.profile) await saveSignupProfile(await profiles.ready, r.user.id, r.profile, { email: r.user.email }).catch((error) => console.error(`[auth] signup profile save failed: ${(error as Error).message}`))
     return c.redirect(r.next ?? '/me')
@@ -421,7 +449,40 @@ export function createApp(deps: Deps) {
   })
   app.get('/me', async (c) => {
     const user = sessionUser(c)
-    return user ? page(c, mePage(ctxOf(c), { user, products: store.mine(user.id), invite: store.inviteStats(user.id), karma: service.karma.summary(user.id), howToEarn: HOW_TO_EARN, featureDays: config.featureDays, ...signinInfo(c, user), profile: await (await profiles.ready).get(user.id), detailsNote: c.req.query('details') === 'saved' ? 'Your details are saved.' : null })) : toLogin(c)
+    return user ? page(c, mePage(ctxOf(c), { user, products: store.mine(user.id), invite: store.inviteStats(user.id), karma: service.karma.summary(user.id), howToEarn: HOW_TO_EARN, featureDays: config.featureDays, daysBalance: await service.featuredDays(user), ...signinInfo(c, user), profile: await (await profiles.ready).get(user.id), detailsNote: c.req.query('details') === 'saved' ? 'Your details are saved.' : null })) : toLogin(c)
+  })
+  // "Have a code?": a credit code (@profullstack/redeem-credits) adds Featured days to the balance.
+  app.post('/me/redeem', async (c) => {
+    const user = sessionUser(c)
+    if (!user) return toLogin(c)
+    if (crossSite(c)) return c.redirect('/me')
+    const code = String(((await c.req.parseBody()) as Record<string, string>).code ?? '')
+    let note: string
+    let status = 200
+    if (!redeemLimit.allow(`redeem:${user.id}`) || !redeemLimit.allow(`redeem-ip:${ip(c)}`)) (note = 'Too many tries. Wait a few minutes.'), (status = 429)
+    else
+      try {
+        note = (await service.redeem(user, code)).message
+      } catch (e) {
+        note = e instanceof Error ? e.message : String(e)
+        status = 400
+      }
+    return page(c, mePage(ctxOf(c), { user, products: store.mine(user.id), invite: store.inviteStats(user.id), karma: service.karma.summary(user.id), howToEarn: HOW_TO_EARN, featureDays: config.featureDays, daysBalance: await service.featuredDays(user), redeemNote: note, redeemError: status !== 200, ...signinInfo(c, user), profile: await (await profiles.ready).get(user.id) }), status)
+  })
+  // Spend Featured days from the balance on a listing you own.
+  app.post('/p/:slug/feature-days', async (c) => {
+    const user = sessionUser(c)
+    if (!user) return toLogin(c)
+    const p = store.bySlug(c.req.param('slug'))
+    if (!p || p.status === 'hidden') return c.notFound()
+    if (crossSite(c) || !store.canEdit(p, user)) return c.redirect(`/p/${p.slug}`)
+    const days = Number(((await c.req.parseBody()) as Record<string, string>).days ?? 0)
+    try {
+      await service.spendFeaturedDays(p, user, days)
+      return c.redirect(`/p/${p.slug}?featured=days`)
+    } catch (e) {
+      return productView(c, p, { error: e instanceof Error ? e.message : String(e) }, 400)
+    }
   })
   // The shared profile (@profullstack/profile): the /me form, and GET/PUT/PATCH /api/v1/me/profile for a session or an API key.
   app.post('/me/profile', async (c) => {
@@ -431,33 +492,53 @@ export function createApp(deps: Deps) {
     const form = (await c.req.parseBody()) as Record<string, string>
     const email = isPlaceholder(user.email) ? null : user.email
     const check = validateProfile({ ...form, email }, { required: ['first_name', 'last_name'] })
-    if (!check.ok) return page(c, mePage(ctxOf(c), { user, products: store.mine(user.id), invite: store.inviteStats(user.id), karma: service.karma.summary(user.id), howToEarn: HOW_TO_EARN, featureDays: config.featureDays, ...signinInfo(c, user), profile: form, detailsNote: 'Some fields need fixing.', detailsError: true, detailsErrors: check.errors }), 400)
+    if (!check.ok) return page(c, mePage(ctxOf(c), { user, products: store.mine(user.id), invite: store.inviteStats(user.id), karma: service.karma.summary(user.id), howToEarn: HOW_TO_EARN, featureDays: config.featureDays, daysBalance: await service.featuredDays(user), ...signinInfo(c, user), profile: form, detailsNote: 'Some fields need fixing.', detailsError: true, detailsErrors: check.errors }), 400)
     await (await profiles.ready).save(user.id, check.profile)
     return c.redirect('/me?details=saved#details')
   })
-  app.post('/me/key', (c) => {
+  app.post('/me/key', async (c) => {
     const user = sessionUser(c)
     if (!user) return toLogin(c)
     if (crossSite(c)) return c.redirect('/me')
-    return page(c, mePage(ctxOf(c), { user, products: store.mine(user.id), apiKey: store.newApiKey(user.id), invite: store.inviteStats(user.id), karma: service.karma.summary(user.id), howToEarn: HOW_TO_EARN, featureDays: config.featureDays, ...signinInfo(c, user) }))
+    return page(c, mePage(ctxOf(c), { user, products: store.mine(user.id), apiKey: store.newApiKey(user.id), invite: store.inviteStats(user.id), karma: service.karma.summary(user.id), howToEarn: HOW_TO_EARN, featureDays: config.featureDays, daysBalance: await service.featuredDays(user), ...signinInfo(c, user) }))
   })
 
   // Invites: a link per member; a new member it brings in who launches earns the inviter a free Featured week.
   app.get('/i/:code', (c) => {
     const code = c.req.param('code')
+    // A scarce invite code: whoever made it stays private until it is used.
+    if (isInviteCode(code)) {
+      if (!sessionUser(c)) setCookie(c, INVITE_COOKIE, code.trim().toUpperCase(), { httpOnly: true, secure: secure(c), sameSite: 'Lax', path: '/', maxAge: 30 * 86400 })
+      return page(c, inviteLanding(ctxOf(c), { inviter: null, bonusDays: INVITE_BONUS_DAYS }))
+    }
     const inviter = store.inviterOf(code)
     if (!inviter) return c.redirect('/invite')
     if (!sessionUser(c)) setCookie(c, REF_COOKIE, code, { httpOnly: true, secure: secure(c), sameSite: 'Lax', path: '/', maxAge: 30 * 86400 })
     return page(c, inviteLanding(ctxOf(c), { inviter: store.publicName(inviter) }))
   })
-  const inviteView = async (c: Context<Env>, extra: { flash?: string; error?: string } = {}, status = 200) => {
+  const inviteCodes = async (user: User) => ({ quota: await service.affiliates.quota(user.id), invites: await service.affiliates.invites(user.id), bonusDays: INVITE_BONUS_DAYS })
+  const inviteView = async (c: Context<Env>, extra: { flash?: string; error?: string; newCode?: string } = {}, status = 200) => {
     const user = sessionUser(c)
     const me = user
-      ? { link: inviteLink(user), stats: store.inviteStats(user.id), name: store.publicName(user.id), displayName: user.displayName, listings: store.mine(user.id).filter((p) => p.status === 'live'), ...extra }
+      ? { link: inviteLink(user), stats: store.inviteStats(user.id), name: store.publicName(user.id), displayName: user.displayName, listings: store.mine(user.id).filter((p) => p.status === 'live'), codes: { ...(await inviteCodes(user)), newLink: extra.newCode ? `${origin}/i/${extra.newCode}` : undefined }, ...extra }
       : undefined
     return page(c, invitePage(ctxOf(c), { featureDays: config.featureDays, featureUsd: config.featureUsd, inviters: await inviters(10), me }), status)
   }
   app.get('/invite', (c) => inviteView(c))
+  app.get('/invites', (c) => c.redirect('/invite#codes'))
+  // A scarce invite code: three each, single use.
+  app.post('/invite/code', async (c) => {
+    const user = sessionUser(c)
+    if (!user) return toLogin(c)
+    if (crossSite(c)) return c.redirect('/invite')
+    const note = String(((await c.req.parseBody()) as Record<string, string>).note ?? '').slice(0, 80)
+    try {
+      const invite = await service.affiliates.createInvite(user.id, note)
+      return inviteView(c, { newCode: invite.code })
+    } catch (e) {
+      return inviteView(c, { error: (e as Error).message === 'no invites left' ? `You have used all ${INVITES_PER_PERSON} invite codes.` : (e as Error).message }, 400)
+    }
+  })
   app.post('/invite/name', async (c) => {
     const user = sessionUser(c)
     if (!user) return toLogin(c)
@@ -871,18 +952,62 @@ export function createApp(deps: Deps) {
       return user ? { id: user.id, email: isPlaceholder(user.email) ? null : user.email } : null
     },
   })
-  app.get('/api/v1/me', (c) => {
+  app.get('/api/v1/me', async (c) => {
     const user = apiUser(c)
     if (!user) return c.json(NEEDS_ACCOUNT, 401)
-    return c.json({ email: isPlaceholder(user.email) ? null : user.email, coinpay: Boolean(store.identities(user.id).some((i) => i.provider === COINPAY)), products: store.mine(user.id).map((p) => ({ ...apiProduct(p), owner: p.ownerId === user.id })), invite: apiInvite(user), karma: apiKarma(user) })
+    return c.json({ email: isPlaceholder(user.email) ? null : user.email, coinpay: Boolean(store.identities(user.id).some((i) => i.provider === COINPAY)), products: store.mine(user.id).map((p) => ({ ...apiProduct(p), owner: p.ownerId === user.id })), invite: await apiInvite(user), featured_days: await service.featuredDays(user), karma: apiKarma(user) })
   })
-  const apiInvite = (user: User) => {
+  const apiInvite = async (user: User) => {
     const s = store.inviteStats(user.id)
-    return { link: inviteLink(user), code: s.code, invited: s.invited, launched: s.launched, credits: s.credits, karma_credits: s.karmaCredits, used: s.used, feature_days: config.featureDays }
+    const codes = await inviteCodes(user)
+    return {
+      link: inviteLink(user),
+      code: s.code,
+      invited: s.invited,
+      launched: s.launched,
+      credits: s.credits,
+      karma_credits: s.karmaCredits,
+      used: s.used,
+      feature_days: config.featureDays,
+      // Scarce single-use invite codes: the code itself is shown once, when made.
+      invite_codes: { quota: codes.quota, bonus_days: codes.bonusDays, invites: codes.invites.map((i) => ({ id: i.id, note: i.note, created_at: new Date(i.createdAt).toISOString(), expires_at: i.expiresAt ? new Date(i.expiresAt).toISOString() : null, used: Boolean(i.usedAt), used_at: i.usedAt ? new Date(i.usedAt).toISOString() : null })) },
+    }
   }
-  app.get('/api/v1/invites', (c) => {
+  app.get('/api/v1/invites', async (c) => {
     const user = apiUser(c)
-    return user ? c.json(apiInvite(user)) : c.json(NEEDS_ACCOUNT, 401)
+    return user ? c.json(await apiInvite(user)) : c.json(NEEDS_ACCOUNT, 401)
+  })
+  app.post('/api/v1/invites', async (c) => {
+    const user = apiUser(c)
+    if (!user) return c.json(NEEDS_ACCOUNT, 401)
+    try {
+      const invite = await service.affiliates.createInvite(user.id, String((await body(c)).note ?? '').slice(0, 80))
+      return c.json({ link: `${origin}/i/${invite.code}`, code: invite.code, expires_at: invite.expiresAt ? new Date(invite.expiresAt).toISOString() : null, left: (await service.affiliates.quota(user.id)).left, bonus_days: INVITE_BONUS_DAYS }, 201)
+    } catch (e) {
+      return c.json({ error: (e as Error).message === 'no invites left' ? `You have used all ${INVITES_PER_PERSON} invite codes.` : (e as Error).message }, 400)
+    }
+  })
+  app.post('/api/v1/redeem', async (c) => {
+    const user = apiUser(c)
+    if (!user) return c.json(NEEDS_ACCOUNT, 401)
+    if (!redeemLimit.allow(`redeem:${user.id}`) || !redeemLimit.allow(`redeem-ip:${ip(c)}`)) return c.json({ error: 'too many tries; wait a few minutes' }, 429)
+    try {
+      const r = await service.redeem(user, String((await body(c)).code ?? ''))
+      return c.json({ ok: true, message: r.message, featured_days: r.days })
+    } catch (e) {
+      return apiError(c, e)
+    }
+  })
+  app.post('/api/v1/products/:slug/feature-days', async (c) => {
+    const user = apiUser(c)
+    const p = owned(c)
+    if (!user || !p) return c.json(NEEDS_KEY, 401)
+    try {
+      const after = await service.spendFeaturedDays(p, user, Number((await body(c)).days ?? 0))
+      return c.json({ featured_until: new Date(after.featuredUntil!).toISOString(), featured_days: await service.featuredDays(user) })
+    } catch (e) {
+      return apiError(c, e)
+    }
   })
   app.post('/api/v1/products/:slug/credit', (c) => {
     const user = apiUser(c)

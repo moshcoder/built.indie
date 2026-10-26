@@ -453,7 +453,7 @@ function pricingHtml(p: Product): string {
 
 const SOCIAL_LABELS: Record<string, string> = { x: 'X', github: 'GitHub', linkedin: 'LinkedIn', discord: 'Discord', youtube: 'YouTube', bluesky: 'Bluesky', instagram: 'Instagram', tiktok: 'TikTok', reddit: 'Reddit', telegram: 'Telegram', producthunt: 'Product Hunt', appstore: 'App Store', playstore: 'Google Play', chrome: 'Chrome Web Store' }
 
-export function productPage(ctx: Ctx, d: { comments?: CommentView[]; reviews?: ReviewView[]; myReview?: Review | null; selfListing?: boolean; error?: string; product: Product; award: { day: string; rank: number } | null; maker: Maker | null; featuredOk?: boolean; featuredCredit?: boolean; launched?: boolean; canEdit?: boolean; credits?: number; buyerEmail?: string; featureUsd: number; featureDays: number; payments: boolean }): string {
+export function productPage(ctx: Ctx, d: { comments?: CommentView[]; reviews?: ReviewView[]; myReview?: Review | null; selfListing?: boolean; error?: string; product: Product; award: { day: string; rank: number } | null; maker: Maker | null; featuredOk?: boolean; featuredCredit?: boolean; featuredDaysUsed?: boolean; launched?: boolean; canEdit?: boolean; credits?: number; daysBalance?: number; buyerEmail?: string; featureUsd: number; featureDays: number; payments: boolean }): string {
   const p = d.product
   const shots = [p.screenshot, ...p.images, p.ogImage].filter((f): f is string => Boolean(f))
   const rel = p.verifiedAt ? 'noopener' : 'noopener nofollow ugc'
@@ -471,6 +471,7 @@ export function productPage(ctx: Ctx, d: { comments?: CommentView[]; reviews?: R
     body: `${d.error ? `<p class="note error" role="alert">${esc(d.error)}</p>` : ''}${d.launched && live ? `<div class="note launched"><b>🚀 ${esc(p.name)} is live.</b> Today’s board resets at midnight UTC: share it now. ${p.ownerId ? '' : `Is it yours? <a href="/p/${esc(p.slug)}/claim">Claim it</a> with your badge (or a DNS record) to edit it and get the ✓.`}</div>` : ''}
 ${d.featuredOk ? '<p class="note">Thanks! Your payment is on its way; the Featured spot starts the moment CoinPay confirms it.</p>' : ''}
 ${d.featuredCredit ? `<p class="note launched">★ Featured for ${d.featureDays} more days with an invite credit. <a href="/invite">Invite another maker</a> to earn the next one.</p>` : ''}
+${d.featuredDaysUsed ? `<p class="note launched">★ Featured with your Featured days${p.featuredUntil ? ` until ${new Date(p.featuredUntil).toISOString().slice(0, 10)}` : ''}.</p>` : ''}
 ${!live ? `<p class="note">${p.status === 'draft' ? 'Draft: only people with the edit link see this.' : 'Taken down.'}</p>` : ''}
 <section class="product-head">
   ${logoImg(p, 72)}
@@ -506,9 +507,10 @@ ${commentsHtml(ctx, p, d.comments ?? [])}
   <pre><code>${esc(badgeSnippet(ctx.origin, p))}</code></pre>
   <div class="row"><button class="chip" data-copy="${esc(badgeSnippet(ctx.origin, p))}">Copy badge HTML</button><form method="post" action="/p/${esc(p.slug)}/verify"><button class="chip">I added it: check</button></form></div>
 </details>
-${d.payments || d.canEdit ? `<details class="card" id="feature"${d.canEdit && d.credits ? ' open' : ''}><summary>Feature it: ${esc(`$${d.featureUsd}`)} for ${d.featureDays} days, or free with an invite</summary>
+${d.payments || d.canEdit ? `<details class="card" id="feature"${d.canEdit && (d.credits || d.daysBalance) ? ' open' : ''}><summary>Feature it: ${esc(`$${d.featureUsd}`)} for ${d.featureDays} days, or free with an invite</summary>
   <p class="muted">Pinned above today’s board on the homepage for ${d.featureDays} days.</p>
   ${d.canEdit && d.credits ? `<form method="post" action="/p/${esc(p.slug)}/credit" class="row"><button class="btn">${icon('star')} Use a free invite credit</button><span class="muted small">${d.credits} left</span></form>` : `<p class="muted small">Free: ${esc(inviteOffer(d.featureDays, d.featureUsd))} <a href="/invite">Get your invite link</a>.</p>`}
+  ${d.canEdit && d.daysBalance ? featureDaysForm(p, d.daysBalance) : ''}
   ${d.payments ? `<form method="post" action="/p/${esc(p.slug)}/feature" class="row"><label class="sr" for="feature-email">Your email</label><input id="feature-email" name="email" type="email" required autocomplete="email" placeholder="you@example.com" value="${esc(d.buyerEmail ?? '')}"><button class="btn${d.canEdit && d.credits ? ' ghost' : ''}">Pay $${esc(d.featureUsd)}</button></form><p class="muted small">You pick any coin or PayPal on CoinPay's checkout page. The receipt goes to your email.</p>` : ''}
 </details>` : ''}` : ''}`,
   })
@@ -710,7 +712,23 @@ ${k.events.length ? `<h3 class="mini-h">History</h3><ol class="ledger">${k.event
 </div>`
 }
 
-export function mePage(ctx: Ctx, d: { user: User; products: Product[]; apiKey?: string; invite: InviteStats; karma?: KarmaSummary; howToEarn?: { action: string; points: number; rule: string }[]; featureDays?: number; coinpay?: { name: string | null } | null; emailless?: boolean; coinpayNote?: string | null; profile?: object | null; detailsNote?: string | null; detailsError?: boolean; detailsErrors?: Record<string, string> }): string {
+/** Spend Featured days from the balance on one listing. */
+function featureDaysForm(p: Product, balance: number): string {
+  return `<form method="post" action="/p/${esc(p.slug)}/feature-days" class="row"><label class="sr" for="days-${esc(p.slug)}">Days</label><input id="days-${esc(p.slug)}" name="days" type="number" min="1" max="${balance}" value="${balance}" inputmode="numeric" style="inline-size:6em"><button class="chip">${icon('star')} Feature ${esc(p.name)} with your days</button><span class="muted small">${balance} day${balance === 1 ? '' : 's'} left</span></form>`
+}
+
+/** "Have a code?": redeem a credit code, see the Featured days it added, spend them on a listing. */
+function featuredDaysCard(d: { products: Product[]; daysBalance?: number; redeemNote?: string; redeemError?: boolean }): string {
+  const balance = d.daysBalance ?? 0
+  const live = d.products.filter((p) => p.status === 'live')
+  return `<div class="card" id="redeem"><h2>${icon('star')} Featured days <span class="karma-total">${balance}</span></h2>
+${d.redeemNote ? `<p class="note${d.redeemError ? ' error' : ' launched'}" role="status">${esc(d.redeemNote)}</p>` : ''}
+<form method="post" action="/me/redeem" class="row"><label class="sr" for="redeem-code">Credit code</label><input id="redeem-code" name="code" required placeholder="Have a code? CR-XXXX-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false"><button class="chip">Redeem</button></form>
+<p class="muted small">A code or an invite adds days to pin any live listing you own on the homepage, the same Featured slot a paid week buys.</p>
+${balance ? (live.length ? live.map((p) => featureDaysForm(p, balance)).join('') : '<p class="muted">You have no live listing yet. <a href="/submit">Launch one</a>, then come back to feature it.</p>') : ''}</div>`
+}
+
+export function mePage(ctx: Ctx, d: { user: User; products: Product[]; apiKey?: string; invite: InviteStats; daysBalance?: number; redeemNote?: string; redeemError?: boolean; karma?: KarmaSummary; howToEarn?: { action: string; points: number; rule: string }[]; featureDays?: number; coinpay?: { name: string | null } | null; emailless?: boolean; coinpayNote?: string | null; profile?: object | null; detailsNote?: string | null; detailsError?: boolean; detailsErrors?: Record<string, string> }): string {
   return layout({
     ctx,
     title: 'Your launches · built.indie',
@@ -721,6 +739,7 @@ export function mePage(ctx: Ctx, d: { user: User; products: Product[]; apiKey?: 
 ${d.coinpayNote ? `<p class="note">${esc(d.coinpayNote)}</p>` : ''}
 <p class="muted">Signed in ${d.emailless ? `with CoinPay${d.coinpay?.name ? ` as ${esc(d.coinpay.name)}` : ''}` : `as ${esc(d.user.email)}`}. <form class="inline" method="post" action="/logout"><button class="linkish">Sign out</button></form></p>
 ${d.products.length ? `<ol class="board">${d.products.map((p) => `<li class="row-item"><a class="row-main" href="/p/${esc(p.slug)}">${logoImg(p)}<span class="row-text"><b>${esc(p.name)}</b><span class="muted">${p.status === 'draft' ? 'draft' : `▲ ${p.votes}`} · ${p.ownerId === d.user.id ? 'claimed ✓' : 'submitted by you, not claimed'}</span></span></a><a class="chip" href="/p/${esc(p.slug)}/edit">Edit</a>${p.ownerId === d.user.id ? '' : `<a class="chip" href="/p/${esc(p.slug)}/claim">Claim</a>`}</li>`).join('')}</ol>` : '<p class="empty">Nothing yet. <a href="/submit">Launch something</a>, or open a listing that is yours and claim it.</p>'}
+${featuredDaysCard(d)}
 ${d.karma ? karmaCard(d.karma, d.howToEarn ?? [], d.featureDays ?? 7) : ''}
 <div class="card"><h2>${icon('star')} Invites</h2><p class="muted">${d.invite.invited} joined through your link · ${d.invite.launched} launched · <b>${d.invite.credits}</b> free Featured week${d.invite.credits === 1 ? '' : 's'} to use${d.invite.karmaCredits ? ` (${d.invite.karmaCredits} from karma)` : ''}.</p><p><a class="chip" href="/invite">Your invite link and credits</a></p></div>
 ${ctx.coinpay || d.coinpay ? `<div class="card" id="signin"><h2>Sign in with CoinPay</h2>${d.coinpay ? `<p class="muted">Connected${d.coinpay.name ? ` (${esc(d.coinpay.name)})` : ''}: your CoinPay account signs you in here.</p>` : `<p class="muted">Connect your CoinPay account to sign in with it, here and across the network. We link the account itself, never by email.</p>${coinpayButton('/me', 'Connect CoinPay')}`}</div>` : ''}
@@ -779,6 +798,9 @@ curl -X POST ${o}/api/v1/products/&lt;slug&gt;/refetch -H 'authorization: Bearer
 curl -X POST ${o}/api/v1/products/&lt;slug&gt;/publish -H 'authorization: Bearer bi_…'
 curl ${o}/api/v1/invites -H 'authorization: Bearer bi_…'                 # your invite link and credits
 curl -X POST ${o}/api/v1/products/&lt;slug&gt;/credit -H 'authorization: Bearer bi_…'   # spend one: Featured for a week
+curl -X POST ${o}/api/v1/redeem -H 'authorization: Bearer bi_…' -d '{"code":"CR-…"}'   # a credit code: Featured days to your balance
+curl -X POST ${o}/api/v1/products/&lt;slug&gt;/feature-days -H 'authorization: Bearer bi_…' -d '{"days":3}'   # spend Featured days on a listing
+curl -X POST ${o}/api/v1/invites -H 'authorization: Bearer bi_…' -d '{"note":"for Ada"}'   # one of your 3 single-use invite codes (both get Featured days)
 curl -X POST ${o}/api/v1/products/&lt;slug&gt;/feature -H 'authorization: Bearer bi_…' -d '{"email":"you@…"}'   # pay: a CoinPay checkout_url (any coin or PayPal)
 curl ${o}/leaderboard/invites.json?period=week                       # top inviters (all|week|month)
 curl '${o}/api/v1/leaderboard?board=karma&amp;period=week'             # top karma (board karma|invites)
@@ -821,7 +843,24 @@ bunx @profullstack/builtindie preview any.site --json</pre></div>
 }
 
 /** Your invite link, what it has earned, and the listings a credit can feature. */
-export function invitePage(ctx: Ctx, d: { featureDays: number; featureUsd: number; inviters: InviterRow[]; me?: { link: string; stats: InviteStats; name: string; displayName: string | null; listings: Product[]; flash?: string; error?: string } }): string {
+export type InviteCodes = {
+  quota: { total: number; used: number; left: number }
+  invites: { id: string; note: string; createdAt: number; expiresAt: number | null; usedAt: number | null; revokedAt?: number | null }[]
+  bonusDays: number
+  newLink?: string
+}
+
+/** Scarce single-use invite codes: a few each, and both people get Featured days when one is used. */
+function inviteCodesCard(c: InviteCodes): string {
+  const state = (i: InviteCodes['invites'][number]) => (i.usedAt ? `used ${new Date(i.usedAt).toISOString().slice(0, 10)}` : i.revokedAt ? 'withdrawn' : i.expiresAt && i.expiresAt < Date.now() ? 'expired' : `open${i.expiresAt ? ` until ${new Date(i.expiresAt).toISOString().slice(0, 10)}` : ''}`)
+  return `<div class="card" id="codes"><h2>${icon('mail')} Invite codes <span class="karma-total">${c.quota.left}/${c.quota.total}</span></h2>
+<p class="muted">Your link above is open to anyone. These are not: you get ${c.quota.total}, each works once, for someone new. When they sign up with it, you both get <b>${c.bonusDays} Featured days</b>.</p>
+${c.newLink ? `<p class="note launched">Your new invite, shown once. Send it to one person:</p><div class="address"><code>${esc(c.newLink)}</code><button class="copy" data-copy="${esc(c.newLink)}">Copy</button></div>` : ''}
+${c.quota.left > 0 ? `<form method="post" action="/invite/code" class="row"><label class="sr" for="invite-note">Who is it for?</label><input id="invite-note" name="note" maxlength="80" placeholder="Who is it for? (only you see this)"><button class="chip">Make an invite code</button></form>` : '<p class="muted small">All used. Thank you for bringing people in.</p>'}
+${c.invites.length ? `<ol class="ledger">${c.invites.map((i) => `<li>${esc(i.note || 'invite')} <span class="muted small">${esc(state(i))}</span></li>`).join('')}</ol>` : ''}</div>`
+}
+
+export function invitePage(ctx: Ctx, d: { featureDays: number; featureUsd: number; inviters: InviterRow[]; me?: { link: string; stats: InviteStats; name: string; displayName: string | null; listings: Product[]; codes?: InviteCodes; flash?: string; error?: string } }): string {
   const m = d.me
   const text = 'I launch my indie products on built.indie: one URL and it pulls in the logo, screenshots and story. Launch yours free:'
   const shares: [string, string, string][] = m
@@ -858,6 +897,7 @@ ${
       }</div>`
     : ''
 }
+${m.codes ? inviteCodesCard(m.codes) : ''}
 <div class="card"><h2>Your name on the board</h2><p class="muted small">Shown as <b>${esc(m.name)}</b>. We never show your email.</p>
 <form method="post" action="/invite/name" class="row"><label class="sr" for="displayName">Display name</label><input id="displayName" name="displayName" maxlength="40" placeholder="Your name or handle" value="${esc(m.displayName ?? '')}"><button class="chip">Save</button></form></div>`
     : '<p class="center"><a class="btn" href="/login?next=/invite">Sign in to get your invite link</a></p>'
@@ -874,7 +914,20 @@ ${d.inviters.length ? invitersList(d.inviters) : '<p class="empty">Nobody yet. O
 }
 
 /** Where an invite link lands: who invited you, and one step to launch. */
-export function inviteLanding(ctx: Ctx, d: { inviter: string }): string {
+export function inviteLanding(ctx: Ctx, d: { inviter: string | null; bonusDays?: number }): string {
+  // A scarce invite code: nobody is named until it is used, and both people get Featured days.
+  if (!d.inviter)
+    return layout({
+      ctx,
+      title: "You're invited to built.indie",
+      description: 'Launch your indie product with one URL. We fetch the logo, screenshots and story; people upvote; you get a badge. Free.',
+      path: '/invite',
+      noindex: true,
+      body: `<section class="hero"><h1>You're invited.</h1>
+<p class="lede">Someone on built.indie spent one of their few invites on you. Sign up and you both get <b>${d.bonusDays ?? 0} Featured days</b>: your launch pinned on the homepage.</p>
+${ctx.user ? '<p class="muted">You are already signed in, so this invite is for someone new. Pass it on.</p>' : `<p><a class="btn" href="/signup?next=/me">${icon('rocket')} Accept: sign up</a></p><p class="muted small">Already a member? Invites are for new members; your days come from <a href="/me#redeem">codes</a> and your own invites.</p>`}
+</section>`,
+    })
   return layout({
     ctx,
     title: `${d.inviter} invited you to launch on built.indie`,

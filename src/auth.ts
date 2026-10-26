@@ -58,7 +58,7 @@ export class Auth {
     if (recent >= 5) return true
     const token = randomBytes(24).toString('base64url')
     // The invite code rides in the link, so it counts even when the mail opens in another browser.
-    db.query('INSERT INTO magic_links (token_hash, email, next, ref, created_at, expires_at, profile) VALUES (?, ?, ?, ?, ?, ?, ?)').run(hashKey(token), email, safeNext(next), ref ? String(ref).slice(0, 32) : null, this.now(), this.now() + LINK_MINUTES * 60_000, profile ? JSON.stringify(profile) : null)
+    db.query('INSERT INTO magic_links (token_hash, email, next, ref, created_at, expires_at, profile) VALUES (?, ?, ?, ?, ?, ?, ?)').run(hashKey(token), email, safeNext(next), ref ? String(ref).slice(0, 80) : null, this.now(), this.now() + LINK_MINUTES * 60_000, profile ? JSON.stringify(profile) : null)
     const url = `${base}/auth/verify?token=${token}`
     const text = `Sign in to built.indie:\n\n${url}\n\nThe link works once, for ${LINK_MINUTES} minutes. If you did not ask for it, ignore this email.`
     const html = `<p>Sign in to <strong>built.indie</strong>:</p><p><a href="${url}" style="display:inline-block;padding:10px 18px;background:#ff5c39;color:#fff;border-radius:8px;text-decoration:none;font-weight:700">Sign in</a></p><p style="color:#666;font-size:13px">Or open ${url}<br>The link works once, for ${LINK_MINUTES} minutes. If you did not ask for it, ignore this email.</p>`

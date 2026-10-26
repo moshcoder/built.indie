@@ -701,6 +701,118 @@ describe('invites', () => {
   })
 })
 
+describe('credit codes and invite codes', () => {
+  const signIn = async (call: ReturnType<typeof setup>['call'], mail: Mail[], email: string, cookie = '') => {
+    await call('/login', { ...form({ email }), headers: { ...form({}).headers, ...(cookie ? { cookie } : {}) } })
+    const token = mail.at(-1)!.text.match(/token=([\w-]+)/)![1]!
+    // Opened without the cookie on purpose: the invite has to ride in the link.
+    return (await call(`/auth/verify?token=${token}`)).headers.get('set-cookie')!.split(';')[0]!
+  }
+  const as = (cookie: string, init: RequestInit = {}) => ({ ...init, headers: { ...(init.headers as Record<string, string>), cookie } })
+
+  test('a credit code adds Featured days once; a wrong or reused code says why; the days feature a listing through featured_until', async () => {
+    const { call, mail, store, service } = setup()
+    const { code } = await service.credits.mint({ grant: { unit: 'featured_days', amount: 5 }, label: 'test' })
+    const ann = await signIn(call, mail, 'ann@example.com')
+    const annId = store.userByEmail('ann@example.com')!.id
+    expect(await (await call('/me', as(ann))).text()).toContain('Have a code?')
+    const good = await call('/me/redeem', as(ann, form({ code: code.toLowerCase() })))
+    expect(good.status).toBe(200)
+    expect(await good.text()).toContain('Added 5 Featured days.')
+    expect(await service.featuredDays({ id: annId })).toBe(5)
+    const again = await call('/me/redeem', as(ann, form({ code })))
+    expect(again.status).toBe(400)
+    expect(await again.text()).toContain('You already redeemed that code.')
+    const bad = await call('/me/redeem', as(ann, form({ code: 'CR-0000-0000-0000-0000' })))
+    expect(bad.status).toBe(400)
+    expect(await bad.text()).toContain('That code is not valid.')
+    // Spend 3 of the 5 on a live listing: the same featured_until a paid week extends.
+    await call('/submit', as(ann, form({ url: 'acme.test' })))
+    await call('/p/acme/edit', as(ann, form({ action: 'publish', name: 'Acme' })))
+    expect(await (await call('/p/acme', as(ann))).text()).toContain('with your days')
+    expect((await call('/p/acme/feature-days', as(ann, form({ days: '3' })))).headers.get('location')).toBe('/p/acme?featured=days')
+    const until = store.bySlug('acme')!.featuredUntil!
+    expect(until).toBeGreaterThan(Date.now() + 2.9 * 86400_000)
+    expect(until).toBeLessThan(Date.now() + 3.1 * 86400_000)
+    expect(await service.featuredDays({ id: annId })).toBe(2)
+    expect((await call('/p/acme/feature-days', as(ann, form({ days: '5' })))).status).toBe(400)
+    expect(store.list('featured').map((p) => p.slug)).toContain('acme')
+    // The API and the CLI.
+    const key = store.newApiKey(annId)
+    const { code: code2 } = await service.credits.mint({ grant: { unit: 'featured_days', amount: 1 } })
+    const r = await (await call('/api/v1/redeem', json({ code: code2 }, { authorization: `Bearer ${key}` }))).json()
+    expect(r).toMatchObject({ ok: true, featured_days: 3 })
+    expect((await call('/api/v1/redeem', json({ code: code2 }, { authorization: `Bearer ${key}` }))).status).toBe(400)
+    expect((await call('/api/v1/redeem', json({ code: code2 }))).status).toBe(401)
+    const spent = await (await call('/api/v1/products/acme/feature-days', json({ days: 1 }, { authorization: `Bearer ${key}` }))).json()
+    expect(spent.featured_days).toBe(2)
+    expect((await (await call('/api/v1/me', { headers: { authorization: `Bearer ${key}` } })).json()).featured_days).toBe(2)
+  })
+
+  test('an invite code works once, for someone new, and gives both people Featured days; three each', async () => {
+    const { call, mail, store, service } = setup()
+    const ann = await signIn(call, mail, 'ann@example.com')
+    const annId = store.userByEmail('ann@example.com')!.id
+    const made = await (await call('/invite/code', as(ann, form({ note: 'for Bob' })))).text()
+    const code = made.match(/\/i\/(INV-[\w-]+)/)![1]!
+    expect(made).toContain('2/3')
+    // Bob follows it: a landing page that names nobody, and the code kept in a cookie.
+    const landing = await call(`/i/${code}`)
+    expect(await landing.text()).toContain("You're invited.")
+    const cookie = landing.headers.get('set-cookie')!.split(';')[0]!
+    expect(cookie).toBe(`bi_invite=${code}`)
+    await signIn(call, mail, 'bob@example.com', cookie)
+    const bobId = store.userByEmail('bob@example.com')!.id
+    expect(await service.featuredDays({ id: bobId })).toBe(2)
+    expect(await service.featuredDays({ id: annId })).toBe(2)
+    // It counts in the invite program too, once.
+    expect(store.inviteStats(annId).invited).toBe(1)
+    // Used up: Carol gets nothing from it, nor does Ann again.
+    await signIn(call, mail, 'carol@example.com', `bi_invite=${code}`)
+    expect(await service.featuredDays({ id: store.userByEmail('carol@example.com')!.id })).toBe(0)
+    expect(await service.featuredDays({ id: annId })).toBe(2)
+    // An existing member signing in with an unused code does not spend it.
+    const second = (await (await call('/invite/code', as(ann, form({})))).text()).match(/\/i\/(INV-[\w-]+)/)![1]!
+    await signIn(call, mail, 'bob@example.com', `bi_invite=${second}`)
+    expect(await service.featuredDays({ id: bobId })).toBe(2)
+    expect((await service.affiliates.invites(annId)).find((i) => !i.usedAt)).toBeTruthy()
+    // Three each: the third is the last.
+    const key = store.newApiKey(annId)
+    const third = await call('/api/v1/invites', json({ note: 'x' }, { authorization: `Bearer ${key}` }))
+    expect(third.status).toBe(201)
+    expect((await third.json()).left).toBe(0)
+    expect((await call('/api/v1/invites', json({}, { authorization: `Bearer ${key}` }))).status).toBe(400)
+    const mine = await (await call('/api/v1/invites', { headers: { authorization: `Bearer ${key}` } })).json()
+    expect(mine.invite_codes.quota).toMatchObject({ total: 3, left: 0 })
+    expect(mine.invite_codes.invites.filter((i: { used: boolean }) => i.used)).toHaveLength(1)
+    expect((await call('/invites')).headers.get('location')).toBe('/invite#codes')
+  })
+
+  test('?ref=<invite code> attributes a new sign-up first-touch through the same cookie as /i/<code>, never twice', async () => {
+    const { call, mail, store } = setup()
+    const ann = await signIn(call, mail, 'ann@example.com')
+    const annId = store.userByEmail('ann@example.com')!.id
+    const memberCode = store.inviteCode(annId)
+    const hit = await call(`/?ref=${memberCode}`)
+    expect(hit.headers.get('set-cookie')).toContain(`bi_ref=${memberCode}`)
+    // Not a member's code (the badge's ?ref=badge): no cookie.
+    expect((await call('/p/nope?ref=badge')).headers.get('set-cookie') ?? '').not.toContain('bi_ref')
+    // First touch: a later ?ref= does not overwrite it.
+    const eve = await signIn(call, mail, 'eve@example.com')
+    const eveCode = store.inviteCode(store.userByEmail('eve@example.com')!.id)
+    expect((await call(`/?ref=${eveCode}`, { headers: { cookie: `bi_ref=${memberCode}` } })).headers.get('set-cookie') ?? '').not.toContain('bi_ref')
+    void eve
+    await signIn(call, mail, 'dan@example.com', `bi_ref=${memberCode}`)
+    expect(store.inviteStats(annId).invited).toBe(1)
+    // A sign-up carrying both an invite code and a ref link is one invite, not two.
+    const code = (await (await call('/invite/code', as(ann, form({})))).text()).match(/\/i\/(INV-[\w-]+)/)![1]!
+    await signIn(call, mail, 'fay@example.com', `bi_ref=${memberCode}; bi_invite=${code}`)
+    expect(store.inviteStats(annId).invited).toBe(2)
+    await signIn(call, mail, 'gus@example.com', `bi_ref=${eveCode}; bi_invite=INV-0000-0000-0000`)
+    expect(store.inviteStats(store.userByEmail('eve@example.com')!.id).invited).toBe(1)
+  })
+})
+
 describe('Featured via a CoinPay hosted checkout session', () => {
   const SECRET = 'whsec_test_0123456789'
   /** A CoinPay that answers POST /api/checkout/sessions and records what it was sent. */

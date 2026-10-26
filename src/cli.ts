@@ -14,6 +14,9 @@
  *   builtindie me                      your launches, BUILTINDIE_KEY
  *   builtindie invite                  your invite link and free Featured credits, BUILTINDIE_KEY
  *   builtindie credit <slug>           spend a credit: feature a listing you own, BUILTINDIE_KEY
+ *   builtindie redeem <code>           a credit code: Featured days to your balance, BUILTINDIE_KEY
+ *   builtindie invite-code [note]      one of your 3 single-use invite codes, BUILTINDIE_KEY
+ *   builtindie feature-days <slug> <n> spend Featured days on a listing you own, BUILTINDIE_KEY
  *   builtindie feature <slug>          pay to feature it: a CoinPay checkout link (any coin or PayPal), BUILTINDIE_KEY
  *   builtindie karma                   your karma, history, next free Featured week, BUILTINDIE_KEY
  *   builtindie leaderboard [karma|invites] [--period week|month|all]
@@ -49,6 +52,9 @@ export const HELP = `builtindie ${VERSION}: launch your indie product with one U
   builtindie me                       your launches
   builtindie invite                   your invite link; each maker it brings in who launches = a free Featured week
   builtindie credit <slug>            spend a credit to feature a listing you own
+  builtindie redeem <code>            redeem a credit code: Featured days to your balance
+  builtindie invite-code [note]       make one of your 3 single-use invite codes (both get Featured days)
+  builtindie feature-days <slug> <n>  spend n Featured days on a listing you own
   builtindie feature <slug> [--email you@x]  pay to feature it: prints a CoinPay checkout link (any coin or PayPal)
   builtindie karma                    your karma, history and how far to the next free Featured week
   builtindie leaderboard [karma|invites] [--period week|month|all]
@@ -241,6 +247,21 @@ export async function main(argv = process.argv.slice(2), out: Out = console, cli
       case 'credit': {
         const r = await client.credit(rest[0] ?? '')
         show(r, `${rest[0]} is Featured until ${r.featured_until.slice(0, 10)} ★  (${r.credits} credit${r.credits === 1 ? '' : 's'} left)`)
+        return 0
+      }
+      case 'redeem': {
+        const r = await client.redeem(rest[0] ?? '')
+        show(r, `${r.message}\nFeatured days: ${r.featured_days}${r.featured_days ? '  (use them: builtindie feature-days <slug> <n>)' : ''}`)
+        return 0
+      }
+      case 'invite-code': {
+        const r = await client.inviteCode(rest.join(' '))
+        show(r, `Your invite (works once, for someone new; you both get ${r.bonus_days} Featured days):\n${r.link}\n${r.left} left`)
+        return 0
+      }
+      case 'feature-days': {
+        const r = await client.featureDays(rest[0] ?? '', Number(rest[1] ?? 0))
+        show(r, `${rest[0]} is Featured until ${r.featured_until.slice(0, 10)} ★  (${r.featured_days} day${r.featured_days === 1 ? '' : 's'} left)`)
         return 0
       }
       case 'feature': {
