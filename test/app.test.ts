@@ -14,6 +14,8 @@ import { initialState, onKey } from '../src/tui.ts'
 import { glyph, icon } from '../src/icons.ts'
 import { cleanTags, inferTags, normalizeTag, tagsFor } from '../src/tags.ts'
 import { signWebhook } from '@profullstack/coinpay-onboard'
+import { verifySignature } from '@profullstack/webhooks'
+import { SESSION_COOKIE } from '../src/auth.ts'
 
 const PNG = (w: number, h: number) => {
   const b = new Uint8Array(33)
@@ -76,6 +78,8 @@ function fakeWeb(overrides: Record<string, Response | (() => Response)> = {}) {
 
 function setup(web = fakeWeb(), txt: Record<string, string[][]> = {}, coinpay: ConstructorParameters<typeof BuiltIndie>[2]['coinpay'] = null) {
   const dir = mkdtempSync(join(tmpdir(), 'builtindie-test-'))
+  /** What customer webhooks were sent, as received. */
+  const hooks: { url: string; headers: Headers; body: string }[] = []
   const store = new Store(join(dir, 'test.db'), 'x'.repeat(32))
   const media = new Media(join(dir, 'media'))
   const service = new BuiltIndie(store, media, {
@@ -87,12 +91,17 @@ function setup(web = fakeWeb(), txt: Record<string, string[][]> = {}, coinpay: C
     fetch: { fetch: web.fetch, resolve: web.resolve },
     claimSecret: 'claim-secret',
     resolveTxt: async (name) => txt[name] ?? [],
+    webhookGuard: { lookup: async () => ['93.184.216.34'] },
+    webhookFetch: (async (url: string | URL, init?: RequestInit) => {
+      hooks.push({ url: String(url), headers: new Headers(init?.headers), body: String(init?.body ?? '') })
+      return new Response(null, { status: 204 })
+    }) as unknown as typeof fetch,
   })
   const mail: Mail[] = []
   const auth = new Auth(store, async (m) => void mail.push(m))
   const app = createApp({ service, auth, adminKey: 'admin-key-0123456789', secureCookies: false, mailer: async (m) => void mail.push(m) })
   const call = (path: string, init: RequestInit = {}, ip = '1.2.3.4') => app.fetch(new Request(`http://localhost${path}`, init), { ip })
-  return { store, service, app, call, mail, web, txt }
+  return { store, service, app, call, mail, web, txt, hooks }
 }
 
 const form = (data: Record<string, string>) => ({ method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', 'sec-fetch-site': 'same-origin' }, body: new URLSearchParams(data).toString() })
@@ -968,5 +977,81 @@ describe('signup profile (@profullstack/profile)', () => {
     const saved = await call('/me/profile', { ...form({ first_name: 'Ada', last_name: 'King', job_title: 'Countess' }), headers: { ...form({}).headers, cookie } })
     expect(saved.headers.get('location')).toBe('/me?details=saved#details')
     expect(await (await call('/me', { headers: { cookie } })).text()).toContain('value="King"')
+  })
+})
+
+describe('customer webhooks (@profullstack/webhooks)', () => {
+  test('a maker adds an endpoint with a key and gets signed events about their listing; the API is scoped to the key', async () => {
+    const { call, store, service, txt, hooks } = setup()
+    const owner = store.findOrCreateUser('owner@acme.test')
+    const key = store.newApiKey(owner.id)
+    const auth = { authorization: `Bearer ${key}` }
+    expect((await call('/api/v1/webhooks')).status).toBe(401)
+    const created = await call('/api/v1/webhooks', json({ url: 'https://hooks.example.com/bi', events: ['product.*', 'comment.created'] }, auth))
+    expect(created.status).toBe(201)
+    const { endpoint, secret } = (await created.json()) as any
+    expect(secret).toStartWith('whsec_')
+    expect((await call('/api/v1/webhooks', json({ url: 'https://hooks.example.com/x', events: ['nope.*'] }, auth))).status).toBe(400)
+    const other = store.newApiKey(store.findOrCreateUser('mallory@example.com').id)
+    expect(((await (await call('/api/v1/webhooks', { headers: { authorization: `Bearer ${other}` } })).json()) as any).endpoints).toEqual([])
+    expect((await call(`/api/v1/webhooks/${endpoint.id}`, { headers: { authorization: `Bearer ${other}` } })).status).toBe(404)
+    const listed = (await (await call('/api/v1/webhooks', { headers: auth })).json()) as any
+    expect(listed.event_types).toContain('product.claimed')
+
+    // Launched anonymously (nobody to tell), then claimed by DNS and upvoted.
+    await call('/submit', form({ url: 'acme.test' }))
+    txt['acme.test'] = [[`${CLAIM_PREFIX}${setupToken(store, owner.id)}`]]
+    expect(((await (await call('/api/v1/products/acme/claim', json({}, auth))).json()) as any).claimed).toBe(true)
+    await call('/api/v1/products/acme/vote', { method: 'POST' }, '5.6.7.8')
+    await service.hooks.drain()
+    const got = hooks.filter((h) => h.url === 'https://hooks.example.com/bi')
+    expect(got.map((h) => JSON.parse(h.body).type)).toEqual(['product.claimed', 'product.upvoted'])
+    const claimed = JSON.parse(got[0]!.body)
+    expect(claimed).toMatchObject({ specversion: '1.0', source: 'https://built.indie.pit.world', subject: 'product:acme', data: { method: 'dns', product: { slug: 'acme', name: 'Acme', page: 'https://built.indie.pit.world/p/acme' } } })
+    expect(JSON.parse(got[1]!.body).data.product.votes).toBe(1)
+    // A Standard Webhooks receiver verifies it with the secret it was given.
+    expect(verifySignature({ headers: got[0]!.headers, body: got[0]!.body, secret }).ok).toBe(true)
+    const log = ((await (await call(`/api/v1/webhooks/${endpoint.id}/deliveries`, { headers: auth })).json()) as any).deliveries
+    expect(log.map((d: any) => d.status)).toEqual(['delivered', 'delivered'])
+  })
+
+  test('comments and reviews from someone else reach the owner; their own do not', async () => {
+    const { call, store, service, txt, hooks } = setup()
+    const owner = store.findOrCreateUser('owner@acme.test')
+    await service.hooks.createEndpoint(owner.id, { url: 'https://hooks.example.com/bi' })
+    await call('/submit', form({ url: 'acme.test' }))
+    txt['acme.test'] = [[`${CLAIM_PREFIX}${setupToken(store, owner.id)}`]]
+    const p = store.bySlug('acme')!
+    await service.claim(p, owner)
+    const fan = store.findOrCreateUser('fan@example.com')
+    service.comment(store.bySlug('acme')!, fan, 'Love it, does it do recurring invoices?')
+    service.comment(store.bySlug('acme')!, owner, 'Yes it does.')
+    service.review(store.bySlug('acme')!, fan, 5, 'Saved me hours chasing invoices every month.')
+    await new Promise((ok) => setTimeout(ok, 10)) // emit is fire-and-forget from the sync calls
+    await service.hooks.drain()
+    const types = hooks.map((h) => JSON.parse(h.body).type)
+    expect(types).toEqual(['product.claimed', 'comment.created', 'review.created'])
+    expect(JSON.parse(hooks[1]!.body).data.comment).toMatchObject({ body: 'Love it, does it do recurring invoices?' })
+    expect(JSON.parse(hooks[2]!.body).data.review).toMatchObject({ rating: 5 })
+  })
+
+  test('the /me card adds, tests and removes an endpoint, showing the secret once', async () => {
+    const { call, store, app } = setup()
+    const user = store.findOrCreateUser('owner@acme.test')
+    const auth = new Auth(store, async () => {})
+    const cookie = `${SESSION_COOKIE}=${auth.createSession(user.id)}`
+    const post = (path: string, data: Record<string, string>) => call(path, { ...form(data), headers: { ...form({}).headers, cookie } })
+    const added = await (await post('/me/webhooks/add', { url: 'https://hooks.example.com/me', events: 'product.*' })).text()
+    expect(added).toContain('Webhook added')
+    expect(added).toMatch(/whsec_[A-Za-z0-9+/=]+/)
+    const id = added.match(/name="id" value="([^"]+)"/)![1]!
+    expect(await (await post('/me/webhooks/test', { id })).text()).toContain('Test delivered (HTTP 204)')
+    const page = await (await call('/me', { headers: { cookie } })).text()
+    expect(page).toContain('https://hooks.example.com/me')
+    expect(page).not.toMatch(/whsec_/)
+    expect(await (await post('/me/webhooks/delete', { id })).text()).toContain('Webhook removed')
+    // Another site cannot post the form.
+    expect((await call('/me/webhooks/add', { ...form({ url: 'https://evil.example/x' }), headers: { ...form({}).headers, 'sec-fetch-site': 'cross-site', cookie } })).status).toBe(302)
+    void app
   })
 })

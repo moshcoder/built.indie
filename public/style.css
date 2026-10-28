@@ -121,6 +121,9 @@ a.tag:hover { color: var(--text); text-decoration: none; }
 .maker { margin: .8rem 0 .2rem; }
 .address { display: flex; gap: .5rem; align-items: center; margin: .3rem 0 .6rem; }
 .address code { flex: 1; padding: .55rem .7rem; }
+.hooks { list-style: none; padding: 0; margin: .4rem 0; }
+.hooks li { margin: .5rem 0; overflow-wrap: anywhere; }
+.hooks form.inline { margin-right: .3rem; }
 .copy { font: inherit; font-size: .85rem; padding: .5rem .8rem; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); cursor: pointer; white-space: nowrap; }
 .pics { border: 1px solid var(--line); border-radius: 12px; padding: .8rem; margin: 1rem 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: .7rem; }
 .pics legend { font-weight: 600; padding: 0 .3rem; }

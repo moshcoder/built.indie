@@ -122,6 +122,17 @@ export function createMcpServer(client = new BuiltIndieClient()): McpServer {
     { slug, rating: z.number().int().min(1).max(5), body: z.string().max(2000).default('') },
     wrap((a: { slug: string; rating: number; body: string }) => client.review(a.slug, a.rating, a.body)),
   )
+  server.tool('list_webhooks', 'Your webhook endpoints and the event types built.indie sends (needs BUILTINDIE_KEY).', {}, wrap(() => client.webhooks()))
+  server.tool(
+    'create_webhook',
+    'Have built.indie POST events about your listings (product.launched, product.claimed, product.verified, product.featured, product.upvoted, comment.created, review.created, invite.earned) to a URL, as signed CloudEvents (Standard Webhooks). Returns the signing secret. events: patterns like "product.*"; omit for all.',
+    { url: z.string().url(), events: z.array(z.string()).optional(), description: z.string().max(200).optional() },
+    wrap((a: { url: string; events?: string[]; description?: string }) => client.addWebhook(a.url, a.events, a.description ?? '')),
+  )
+  server.tool('test_webhook', 'Send a webhook.test event to one of your endpoints now.', { id: z.string() }, wrap((a: { id: string }) => client.testWebhook(a.id)))
+  server.tool('rotate_webhook_secret', 'Replace an endpoint signing secret; the old one stops working.', { id: z.string() }, wrap((a: { id: string }) => client.rotateWebhook(a.id)))
+  server.tool('delete_webhook', 'Remove a webhook endpoint.', { id: z.string() }, wrap((a: { id: string }) => client.removeWebhook(a.id)))
+  server.tool('webhook_deliveries', 'Recent webhook deliveries, optionally for one endpoint.', { id: z.string().optional() }, wrap((a: { id?: string }) => client.webhookLog(a.id)))
   return server
 }
 

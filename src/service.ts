@@ -25,12 +25,13 @@ import { keyedSection, listSection, makeOpenProfile, renderOpenProfile } from '@
 import { autofetch, clip, FetchError, normalizeUrl, readProfile, safeFetch, SOCIAL_KINDS, videoFrom, type FetchOptions, type SiteInfo, type Video } from './fetch.js'
 import { Media, screenshot } from './media.js'
 import { dayOf, makerIdFor, newId, Store, type Comment, type Product, type Review, type User } from './db.js'
-import { Karma, SHARE_NETWORKS } from './karma.js'
+import { Karma, ownerOf, SHARE_NETWORKS } from './karma.js'
 import { cleanTags } from './tags.js'
 import { validEmail } from './auth.js'
 import { CoinPay, CoinPayError, readWebhook, verifyWebhook } from '@profullstack/coinpay-onboard'
 import { Credits, sqliteStore as creditStore } from '@profullstack/redeem-credits'
 import { Affiliates, sqliteStore as affiliateStore } from '@profullstack/affiliates'
+import { Webhooks, sqliteStore as webhookStore, type GuardOptions } from '@profullstack/webhooks'
 
 /** The unit a credit code grants: days a listing sits in the Featured slot. */
 export const FEATURED_DAYS = 'featured_days'
@@ -46,6 +47,9 @@ const REDEEM_REASONS: Record<string, string> = {
   already_redeemed: 'You already redeemed that code.',
   revoked: 'That code was withdrawn.',
 }
+
+/** What built.indie tells a maker's webhooks about: things that happen to the listings they own. */
+export const WEBHOOK_EVENTS = ['product.launched', 'product.claimed', 'product.verified', 'product.featured', 'product.upvoted', 'comment.created', 'review.created', 'invite.earned']
 
 export class InputError extends Error {
   constructor(message: string, readonly field?: string) {
@@ -67,6 +71,10 @@ export type Config = {
   resolveTxt?: (name: string) => Promise<string[][]>
   /** Karma per free Featured week (KARMA_PER_CREDIT, default 500). */
   karmaPerCredit?: number
+  /** Checks on customer webhook URLs; tests allow private addresses. */
+  webhookGuard?: GuardOptions
+  /** How webhooks are delivered; tests pass their own. */
+  webhookFetch?: typeof fetch
 }
 
 /** The record an owner adds: `_built-indie.<domain> TXT "built-indie-verify=<token>"` (or the same on the domain itself). */
@@ -104,10 +112,38 @@ export class BuiltIndie {
   readonly credits: Credits
   /** Scarce invite codes (aff_* tables). The open per-member link stays the app's own invite program. */
   readonly affiliates: Affiliates
+  /** Customer webhooks (@profullstack/webhooks): endpoints per member, durable delivery (webhook_* tables). */
+  readonly hooks: Webhooks
   constructor(readonly store: Store, readonly media: Media, readonly config: Config) {
     this.karma = new Karma(store, config.karmaPerCredit ?? 500)
     this.credits = new Credits(creditStore(store.db as never))
     this.affiliates = new Affiliates(affiliateStore(store.db as never), { defaultQuota: INVITES_PER_PERSON })
+    this.hooks = new Webhooks({
+      store: webhookStore(store.db as never),
+      source: config.origin || 'https://built.indie.pit.world',
+      eventTypes: WEBHOOK_EVENTS,
+      ...(config.webhookFetch ? { fetchImpl: config.webhookFetch } : {}),
+      ...(config.webhookGuard ? { guard: config.webhookGuard } : {}),
+      log: (m) => console.log(m),
+    })
+  }
+
+  /** The listing as a webhook carries it. */
+  private hookProduct(p: Product) {
+    const now = this.store.product(p.id) ?? p
+    return { id: now.id, slug: now.slug, name: now.name, url: now.url, domain: now.domain, status: now.status, votes: now.votes, page: this.link(now), featured_until: now.featuredUntil ? new Date(now.featuredUntil).toISOString() : null }
+  }
+
+  /** Tell a member's webhooks; never in the way of what they did. Nobody to tell (an anonymous launch) is fine. */
+  private hook(owner: string | null | undefined, type: string, p: Product, data: Record<string, unknown> = {}): void {
+    if (!owner) return
+    void this.hooks.emit(owner, type, { product: this.hookProduct(p), ...data }, { subject: `product:${p.slug}` }).catch((e) => console.error('built.indie: webhook:', e))
+  }
+
+  /** A listing got Featured time, however it was paid for. */
+  private featured(productId: string, days: number, via: 'payment' | 'invite_credit' | 'featured_days'): void {
+    const p = this.store.product(productId)
+    if (p) this.hook(ownerOf(p), 'product.featured', p, { days, via })
   }
 
   /** Featured days this member holds (from credit codes and invite bonuses), not yet spent on a listing. */
@@ -135,6 +171,7 @@ export class BuiltIndie {
     const r = await this.credits.spend(user.id, FEATURED_DAYS, want, `featured ${p.slug}`)
     if (!r.ok) throw new InputError(r.balance ? `You have ${r.balance} Featured day${r.balance === 1 ? '' : 's'} left.` : 'You have no Featured days. Redeem a code or use an invite.', 'days')
     this.store.extendFeatured(p.id, want)
+    this.featured(p.id, want, 'featured_days')
     return this.store.product(p.id)!
   }
 
@@ -248,11 +285,14 @@ export class BuiltIndie {
 
   /** The claim took: ownership, karma for it, and for the badge when it was the proof. */
   private claimed(p: Product, user: User, verified: boolean): void {
+    const wasVerified = Boolean(p.verifiedAt)
     this.store.claim(p.id, user.id)
     if (verified) this.store.setVerified(p.id, Date.now())
     const now = this.store.product(p.id)!
     if (now.status === 'live') this.karma.claimed(now, user.id)
     if (verified && now.status === 'live') this.karma.badgeVerified(now)
+    this.hook(user.id, 'product.claimed', now, { method: verified ? 'badge' : 'dns' })
+    if (verified && !wasVerified) this.hook(user.id, 'product.verified', now)
   }
 
   /** The product's homepage HTML, read the safe way (no private addresses, robots honoured); '' if it will not load. */
@@ -322,11 +362,13 @@ export class BuiltIndie {
     this.karma.launched(live)
     // A claim made while it was a draft pays once it is live.
     if (live.ownerId) this.karma.claimed(live, live.ownerId)
+    if (p.status !== 'live') this.hook(ownerOf(live), 'product.launched', live)
     // An invited member's first live listing earns whoever invited them a free Featured week.
     const inviter = p.submitterUser ? this.store.earnInvite(p.submitterUser, p.id) : null
     if (inviter) {
       this.karma.inviteConverted(inviter, p.id)
       this.onInviteEarned?.(inviter, live)
+      this.hook(inviter, 'invite.earned', live, { credits: this.store.inviteStats(inviter).credits })
     }
     return live
   }
@@ -338,6 +380,7 @@ export class BuiltIndie {
     if (p.status !== 'live') throw new InputError('Only a live listing takes votes.')
     if (!this.store.vote(p.id, voter, Date.now(), user?.id ?? null)) return false
     this.karma.voted(p, user?.id ?? null)
+    if (!user || user.id !== ownerOf(p)) this.hook(ownerOf(p), 'product.upvoted', p, { by_member: Boolean(user) })
     return true
   }
 
@@ -354,6 +397,7 @@ export class BuiltIndie {
     }
     const c = this.store.addComment({ productId: p.id, userId: user.id, parentId: parent?.id ?? null, body })
     this.karma.commented(p, user.id, c)
+    if (user.id !== ownerOf(p)) this.hook(ownerOf(p), 'comment.created', p, { comment: { id: c.id, parent_id: c.parentId, author: this.store.publicName(user.id), body: c.body, url: `${this.link(p)}#c-${c.id}` } })
     return c
   }
 
@@ -374,6 +418,7 @@ export class BuiltIndie {
     const body = String(text ?? '').replace(/\r\n?/g, '\n').trim().slice(0, 2000)
     const r = this.store.putReview({ productId: p.id, userId: user.id, rating: stars, body })
     this.karma.reviewed(p, user.id, r)
+    if (user.id !== ownerOf(p)) this.hook(ownerOf(p), 'review.created', p, { review: { rating: r.rating, author: this.store.publicName(user.id), body: r.body } })
     return r
   }
 
@@ -397,6 +442,7 @@ export class BuiltIndie {
   redeemCredit(p: Product, user: User): Product {
     if (p.status !== 'live') throw new InputError('Only a live listing can be featured.')
     if (!this.store.redeemCredit(user.id, p.id, this.config.featureDays)) throw new InputError('No invite credits left. Invite a maker who launches to earn one.')
+    this.featured(p.id, this.config.featureDays, 'invite_credit')
     return this.store.product(p.id)!
   }
 
@@ -475,7 +521,9 @@ export class BuiltIndie {
   async verify(p: Product): Promise<boolean> {
     const html = await this.homepage(p)
     const ok = this.linksBack(html) || this.badgeIds(html).some((id) => this.store.badge(id)?.productId === p.id)
+    const was = Boolean(this.store.product(p.id)?.verifiedAt)
     this.store.setVerified(p.id, ok ? Date.now() : null)
+    if (ok && !was && p.status === 'live') this.hook(ownerOf(p), 'product.verified', p)
     if (ok && p.status === 'live') this.karma.badgeVerified(p)
     return ok
   }
@@ -603,7 +651,11 @@ export class BuiltIndie {
       null
     if (!row) return { ok: true }
     if (ev.paymentId) this.store.notePaymentId(row.ref, ev.paymentId, ev.method || null)
-    if (ev.paid) return { ok: true, settled: this.store.settle(row.ref) }
+    if (ev.paid) {
+      const settled = this.store.settle(row.ref)
+      if (settled) this.featured(row.productId, row.days, 'payment')
+      return { ok: true, settled }
+    }
     const status = ev.status || ev.type.replace(/^payment\./, '')
     if (status) this.store.setPaymentStatus(row.ref, status)
     return { ok: true, settled: false }
