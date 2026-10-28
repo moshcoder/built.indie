@@ -7,6 +7,9 @@ export type SearchFilters = Partial<{ category: string[]; tag: string[]; has: st
 export type FacetValue = { value: string; label: string; count: number }
 export type SearchResult = { total: number; page: number; pages: number; products: (ApiProduct & { categories: string[] })[]; facets?: Record<string, FacetValue[]>; web: string }
 
+export type ApiWebhook = { id: string; url: string; events: string[]; description: string; enabled: boolean; failures: number; disabled_reason: string | null; created_at: string }
+export type ApiDelivery = { id: string; endpoint_id: string; event_type: string; status: string; attempts: number; last_status: number | null; last_error: string | null; created_at: string }
+
 export type ApiProduct = {
   slug: string
   name: string
@@ -198,6 +201,31 @@ export class BuiltIndieClient {
 
   review(slug: string, rating: number, body: string): Promise<{ review: { rating: number; body: string }; product: { rating: number | null; count: number }; karma: number }> {
     return this.call('POST', `/api/v1/products/${encodeURIComponent(slug)}/reviews`, { rating, body }, this.needKey())
+  }
+
+  /** Your webhook endpoints, and the events built.indie sends. */
+  webhooks(): Promise<{ endpoints: ApiWebhook[]; event_types: string[] }> {
+    return this.call('GET', '/api/v1/webhooks', undefined, this.needKey())
+  }
+
+  addWebhook(url: string, events?: string[], description = ''): Promise<{ endpoint: ApiWebhook; secret: string }> {
+    return this.call('POST', '/api/v1/webhooks', { url, ...(events?.length ? { events } : {}), description }, this.needKey())
+  }
+
+  removeWebhook(id: string): Promise<{ deleted: true }> {
+    return this.call('DELETE', `/api/v1/webhooks/${encodeURIComponent(id)}`, undefined, this.needKey())
+  }
+
+  testWebhook(id: string): Promise<{ ok: boolean; status: number | null; error: string | null }> {
+    return this.call('POST', `/api/v1/webhooks/${encodeURIComponent(id)}/test`, {}, this.needKey())
+  }
+
+  rotateWebhook(id: string): Promise<{ secret: string }> {
+    return this.call('POST', `/api/v1/webhooks/${encodeURIComponent(id)}/rotate`, {}, this.needKey())
+  }
+
+  webhookLog(id?: string): Promise<{ deliveries: ApiDelivery[] }> {
+    return this.call('GET', id ? `/api/v1/webhooks/${encodeURIComponent(id)}/deliveries` : '/api/v1/webhooks/deliveries', undefined, this.needKey())
   }
 
   verify(slug: string): Promise<{ verified: boolean }> {

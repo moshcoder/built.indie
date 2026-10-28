@@ -26,6 +26,7 @@ import { BuiltIndie, CLAIM_LABEL, CLAIM_PREFIX, INVITE_BONUS_DAYS, INVITES_PER_P
 import { autofetch, FetchError } from './fetch.js'
 import { COINPAY_ERRORS, coinpayOAuthFromEnv, isPlaceholder, mountCoinPaySignin, PROVIDER as COINPAY, type CoinPayOAuth } from './coinpay-signin.js'
 import { VERSION } from './version.js'
+import { webhooksApi } from '@profullstack/webhooks'
 import { mountProfileRoutes, PROFILE_ENHANCE_SCRIPT, saveSignupProfile, validateProfile } from '@profullstack/profile'
 import { openProfiles } from './profile.js'
 
@@ -95,6 +96,7 @@ export function createApp(deps: Deps) {
   const commentLimit = new Limiter(10, 10 * 60_000)
   const shareLimit = new Limiter(60, 10 * 60_000)
   const redeemLimit = new Limiter(10, 10 * 60_000)
+  const hookLimit = new Limiter(30, 10 * 60_000)
   const origin = config.origin
   // The shared profile fields (profile.ts); user_profiles is created as the app starts.
   const profiles = openProfiles(store.db)
@@ -449,7 +451,7 @@ export function createApp(deps: Deps) {
   })
   app.get('/me', async (c) => {
     const user = sessionUser(c)
-    return user ? page(c, mePage(ctxOf(c), { user, products: store.mine(user.id), invite: store.inviteStats(user.id), karma: service.karma.summary(user.id), howToEarn: HOW_TO_EARN, featureDays: config.featureDays, daysBalance: await service.featuredDays(user), ...signinInfo(c, user), profile: await (await profiles.ready).get(user.id), detailsNote: c.req.query('details') === 'saved' ? 'Your details are saved.' : null })) : toLogin(c)
+    return user ? page(c, mePage(ctxOf(c), { user, products: store.mine(user.id), invite: store.inviteStats(user.id), karma: service.karma.summary(user.id), howToEarn: HOW_TO_EARN, featureDays: config.featureDays, daysBalance: await service.featuredDays(user), ...signinInfo(c, user), webhooks: await service.hooks.listEndpoints(user.id), profile: await (await profiles.ready).get(user.id), detailsNote: c.req.query('details') === 'saved' ? 'Your details are saved.' : null })) : toLogin(c)
   })
   // "Have a code?": a credit code (@profullstack/redeem-credits) adds Featured days to the balance.
   app.post('/me/redeem', async (c) => {
@@ -467,7 +469,7 @@ export function createApp(deps: Deps) {
         note = e instanceof Error ? e.message : String(e)
         status = 400
       }
-    return page(c, mePage(ctxOf(c), { user, products: store.mine(user.id), invite: store.inviteStats(user.id), karma: service.karma.summary(user.id), howToEarn: HOW_TO_EARN, featureDays: config.featureDays, daysBalance: await service.featuredDays(user), redeemNote: note, redeemError: status !== 200, ...signinInfo(c, user), profile: await (await profiles.ready).get(user.id) }), status)
+    return page(c, mePage(ctxOf(c), { user, products: store.mine(user.id), invite: store.inviteStats(user.id), karma: service.karma.summary(user.id), howToEarn: HOW_TO_EARN, featureDays: config.featureDays, daysBalance: await service.featuredDays(user), redeemNote: note, redeemError: status !== 200, ...signinInfo(c, user), webhooks: await service.hooks.listEndpoints(user.id), profile: await (await profiles.ready).get(user.id) }), status)
   })
   // Spend Featured days from the balance on a listing you own.
   app.post('/p/:slug/feature-days', async (c) => {
@@ -492,7 +494,7 @@ export function createApp(deps: Deps) {
     const form = (await c.req.parseBody()) as Record<string, string>
     const email = isPlaceholder(user.email) ? null : user.email
     const check = validateProfile({ ...form, email }, { required: ['first_name', 'last_name'] })
-    if (!check.ok) return page(c, mePage(ctxOf(c), { user, products: store.mine(user.id), invite: store.inviteStats(user.id), karma: service.karma.summary(user.id), howToEarn: HOW_TO_EARN, featureDays: config.featureDays, daysBalance: await service.featuredDays(user), ...signinInfo(c, user), profile: form, detailsNote: 'Some fields need fixing.', detailsError: true, detailsErrors: check.errors }), 400)
+    if (!check.ok) return page(c, mePage(ctxOf(c), { user, products: store.mine(user.id), invite: store.inviteStats(user.id), karma: service.karma.summary(user.id), howToEarn: HOW_TO_EARN, featureDays: config.featureDays, daysBalance: await service.featuredDays(user), ...signinInfo(c, user), webhooks: await service.hooks.listEndpoints(user.id), profile: form, detailsNote: 'Some fields need fixing.', detailsError: true, detailsErrors: check.errors }), 400)
     await (await profiles.ready).save(user.id, check.profile)
     return c.redirect('/me?details=saved#details')
   })
@@ -500,7 +502,36 @@ export function createApp(deps: Deps) {
     const user = sessionUser(c)
     if (!user) return toLogin(c)
     if (crossSite(c)) return c.redirect('/me')
-    return page(c, mePage(ctxOf(c), { user, products: store.mine(user.id), apiKey: store.newApiKey(user.id), invite: store.inviteStats(user.id), karma: service.karma.summary(user.id), howToEarn: HOW_TO_EARN, featureDays: config.featureDays, daysBalance: await service.featuredDays(user), ...signinInfo(c, user) }))
+    return page(c, mePage(ctxOf(c), { user, products: store.mine(user.id), apiKey: store.newApiKey(user.id), invite: store.inviteStats(user.id), karma: service.karma.summary(user.id), howToEarn: HOW_TO_EARN, featureDays: config.featureDays, daysBalance: await service.featuredDays(user), ...signinInfo(c, user), webhooks: await service.hooks.listEndpoints(user.id) }))
+  })
+
+  // Webhooks from /me: add, test, rotate, remove. /api/v1/webhooks does the same with a key.
+  app.post('/me/webhooks/:action{(add|test|rotate|delete)}', async (c) => {
+    const user = sessionUser(c)
+    if (!user) return toLogin(c)
+    if (crossSite(c)) return c.redirect('/me#webhooks')
+    const form = (await c.req.parseBody()) as Record<string, string>
+    const show = async (extra: { webhookNote: string; webhookSecret?: string }, status = 200) =>
+      page(c, mePage(ctxOf(c), { user, products: store.mine(user.id), invite: store.inviteStats(user.id), karma: service.karma.summary(user.id), howToEarn: HOW_TO_EARN, featureDays: config.featureDays, daysBalance: await service.featuredDays(user), ...signinInfo(c, user), webhooks: await service.hooks.listEndpoints(user.id), profile: await (await profiles.ready).get(user.id), ...extra, webhookError: status !== 200 }), status)
+    if (!hookLimit.allow(`hooks:${user.id}`)) return show({ webhookNote: 'Too many changes. Wait a few minutes.' }, 429)
+    try {
+      const action = c.req.param('action')
+      if (action === 'add') {
+        const r = await service.hooks.createEndpoint(user.id, { url: form.url ?? '', events: form.events?.trim() || undefined, description: form.description ?? '' })
+        return show({ webhookNote: 'Webhook added. Copy its signing secret now; "New secret" replaces it.', webhookSecret: r.secret })
+      }
+      const id = form.id ?? ''
+      if (action === 'test') {
+        const r = await service.hooks.test(user.id, id)
+        return show({ webhookNote: r.ok ? `Test delivered (HTTP ${r.status}).` : `Test failed: ${r.error ?? `HTTP ${r.status}`}` })
+      }
+      if (action === 'rotate') return show({ webhookNote: 'New signing secret below; the old one has stopped working.', webhookSecret: (await service.hooks.rotateSecret(user.id, id)).secret })
+      await service.hooks.deleteEndpoint(user.id, id)
+      return show({ webhookNote: 'Webhook removed.' })
+    } catch (e) {
+      const status = (e as { status?: number }).status
+      return show({ webhookNote: e instanceof Error ? e.message : String(e) }, status && status >= 400 && status < 500 ? status : 400)
+    }
   })
 
   // Invites: a link per member; a new member it brings in who launches earns the inviter a free Featured week.
@@ -1021,6 +1052,19 @@ export function createApp(deps: Deps) {
     }
   })
 
+  // Customer webhooks: the @profullstack/webhooks API, scoped to the key's account.
+  const hookOwner = new WeakMap<Request, string>()
+  const hooksApi = webhooksApi(service.hooks, { basePath: '/api/v1/webhooks', owner: (req) => hookOwner.get(req) })
+  const webhooksRoute = async (c: Context) => {
+    const user = apiUser(c)
+    if (!user) return c.json(NEEDS_ACCOUNT, 401)
+    if (c.req.method !== 'GET' && !hookLimit.allow(`hooks:${user.id}`)) return c.json({ error: 'too many changes; wait a few minutes' }, 429)
+    hookOwner.set(c.req.raw, user.id)
+    return (await hooksApi(c.req.raw)) ?? c.json({ error: 'not found' }, 404)
+  }
+  app.all('/api/v1/webhooks', webhooksRoute)
+  app.all('/api/v1/webhooks/*', webhooksRoute)
+
   // Karma, comments, reviews, shares.
   const apiKarma = (user: User) => {
     const k = service.karma.summary(user.id)
@@ -1196,6 +1240,8 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   }
   setTimeout(() => void reverify(), 60_000).unref?.()
   setInterval(() => void reverify(), 6 * 3600_000).unref?.()
+  // Customer webhooks: deliveries waiting from before the restart go out now, then every 5 s.
+  service.hooks.start()
   return Bun.serve({
     port: options.port ?? Number(env.PORT ?? 8798),
     hostname: options.hostname ?? env.HOST ?? '127.0.0.1',

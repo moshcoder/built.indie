@@ -67,6 +67,10 @@ export const HELP = `builtindie ${VERSION}: launch your indie product with one U
   builtindie refetch <slug>           read the homepage again
   builtindie publish <slug>           put a draft live
   builtindie verify <slug>            check the badge is on your homepage
+  builtindie webhooks                 your webhook endpoints and the events built.indie sends
+  builtindie webhook add <url> [events...]   POST events about your listings to a URL (prints the signing secret)
+  builtindie webhook test|rotate|rm <id>     send a test, replace the secret, or remove it
+  builtindie webhook log [id]         recent deliveries
   builtindie mcp                      MCP server: claude mcp add builtindie -- bunx @profullstack/builtindie mcp
   builtindie serve [--port N]         run your own instance
 
@@ -307,6 +311,32 @@ export async function main(argv = process.argv.slice(2), out: Out = console, cli
       case 'reviews': {
         const r = await client.reviews(rest[0] ?? '')
         show(r, `${r.rating === null ? 'No reviews yet.' : `★ ${r.rating} from ${r.count}`}\n${r.reviews.map((x) => `${'★'.repeat(x.rating)}  ${x.author} (${x.karma} karma) ${x.at.slice(0, 10)}\n  ${x.body}`).join('\n')}`)
+        return 0
+      }
+      case 'webhooks': {
+        const r = await client.webhooks()
+        show(r, [...r.endpoints.map((w) => `${w.id}  ${w.url}  ${w.events.join(',')}${w.enabled ? '' : `  OFF (${w.disabled_reason})`}`), `events: ${r.event_types.join(', ')}`].join('\n'))
+        return 0
+      }
+      case 'webhook': {
+        const [sub, arg, ...more] = rest
+        if (sub === 'add') {
+          if (!arg) throw new Error('builtindie webhook add <url> [events...]')
+          const r = await client.addWebhook(arg, more)
+          show(r, `${r.endpoint.id} -> ${r.endpoint.url}\nsigning secret: ${r.secret}`)
+        } else if (sub === 'test') {
+          const r = await client.testWebhook(arg ?? '')
+          show(r, r.ok ? `delivered (HTTP ${r.status})` : `failed: ${r.error ?? `HTTP ${r.status}`}`)
+          return r.ok ? 0 : 1
+        } else if (sub === 'rotate') {
+          const r = await client.rotateWebhook(arg ?? '')
+          show(r, `new signing secret: ${r.secret}`)
+        } else if (sub === 'rm' || sub === 'remove' || sub === 'delete') {
+          show(await client.removeWebhook(arg ?? ''), 'removed')
+        } else if (sub === 'log') {
+          const r = await client.webhookLog(arg)
+          show(r, r.deliveries.map((d) => `${d.created_at.slice(0, 19)}  ${d.event_type.padEnd(18)} ${d.status.padEnd(9)} x${d.attempts} ${d.last_status ?? ''} ${d.last_error ?? ''}`).join('\n') || 'no deliveries yet')
+        } else throw new Error('builtindie webhook add|test|rotate|rm|log')
         return 0
       }
       case 'verify': {

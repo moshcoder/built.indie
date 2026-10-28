@@ -13,6 +13,8 @@ import { RING_PLACEHOLDER } from './ring.js'
 import { ringFooter, ringFooterOptions, setRingFooterOptions } from './ring-footer.js'
 import { icon, SOCIAL_ICONS } from './icons.js'
 import { COLUMNS as PROFILE_COLUMNS, renderProfileFields } from '@profullstack/profile'
+import type { PublicEndpoint } from '@profullstack/webhooks'
+import { WEBHOOK_EVENTS } from './service.js'
 
 export const REPO = 'https://github.com/moshcoder/built.indie'
 
@@ -728,7 +730,7 @@ ${d.redeemNote ? `<p class="note${d.redeemError ? ' error' : ' launched'}" role=
 ${balance ? (live.length ? live.map((p) => featureDaysForm(p, balance)).join('') : '<p class="muted">You have no live listing yet. <a href="/submit">Launch one</a>, then come back to feature it.</p>') : ''}</div>`
 }
 
-export function mePage(ctx: Ctx, d: { user: User; products: Product[]; apiKey?: string; invite: InviteStats; daysBalance?: number; redeemNote?: string; redeemError?: boolean; karma?: KarmaSummary; howToEarn?: { action: string; points: number; rule: string }[]; featureDays?: number; coinpay?: { name: string | null } | null; emailless?: boolean; coinpayNote?: string | null; profile?: object | null; detailsNote?: string | null; detailsError?: boolean; detailsErrors?: Record<string, string> }): string {
+export function mePage(ctx: Ctx, d: { user: User; products: Product[]; apiKey?: string; invite: InviteStats; daysBalance?: number; redeemNote?: string; redeemError?: boolean; karma?: KarmaSummary; howToEarn?: { action: string; points: number; rule: string }[]; featureDays?: number; coinpay?: { name: string | null } | null; emailless?: boolean; coinpayNote?: string | null; profile?: object | null; detailsNote?: string | null; detailsError?: boolean; detailsErrors?: Record<string, string>; webhooks?: PublicEndpoint[]; webhookSecret?: string; webhookNote?: string; webhookError?: boolean }): string {
   return layout({
     ctx,
     title: 'Your launches · built.indie',
@@ -746,10 +748,23 @@ ${ctx.coinpay || d.coinpay ? `<div class="card" id="signin"><h2>Sign in with Coi
 <div class="card" id="details"><h2>Your details</h2><p class="muted small">Private to your account, never shown on a public page.</p>
 ${d.detailsNote ? `<p class="note${d.detailsError ? ' error' : ''}" role="status">${esc(d.detailsNote)}</p>` : ''}
 <form method="post" action="/me/profile">${renderProfileFields({ fields: PROFILE_FIELDS, values: (d.profile ?? {}) as Record<string, string | null>, errors: d.detailsErrors, idPrefix: 'details-' })}<p><button class="chip">Save details</button></p></form></div>
+${webhooksCard(d)}
 <div class="card" id="api"><h2>API key</h2>
 ${d.apiKey ? `<p class="note"><b>Copy it now</b>, we show it once. Making a new one retires this one.</p><div class="address"><code>${esc(d.apiKey)}</code><button class="copy" data-copy="${esc(d.apiKey)}">Copy</button></div><pre>export BUILTINDIE_KEY=${esc(d.apiKey)}</pre>` : '<p class="muted">For the CLI, the TUI and the MCP server: edit and claim from the terminal or an agent.</p>'}
 <form method="post" action="/me/key"><button class="chip">${d.apiKey ? 'Make another' : 'Make an API key'}</button></form></div>`,
   })
+}
+
+/** The /me webhooks card: endpoints with test / new secret / remove, and the add form. */
+function webhooksCard(d: { webhooks?: PublicEndpoint[]; webhookSecret?: string; webhookNote?: string; webhookError?: boolean }): string {
+  const form = (action: string, id: string, label: string, cls = 'chip') => `<form class="inline" method="post" action="/me/webhooks/${action}"><input type="hidden" name="id" value="${esc(id)}"><button class="${cls}">${label}</button></form>`
+  return `<div class="card" id="webhooks"><h2>Webhooks</h2>
+<p class="muted small">built.indie POSTs what happens to your listings to your URL: ${WEBHOOK_EVENTS.map((e) => `<code>${esc(e)}</code>`).join(', ')}. CloudEvents JSON, signed per <a href="https://www.standardwebhooks.com/" rel="noopener">Standard Webhooks</a> (verify with <code>@profullstack/webhooks</code> or any Standard Webhooks library); retried for about three days.</p>
+${d.webhookNote ? `<p class="note${d.webhookError ? ' error' : ''}" role="status">${esc(d.webhookNote)}</p>` : ''}
+${d.webhookSecret ? `<p class="note"><b>Signing secret</b>, shown once:</p><div class="address"><code>${esc(d.webhookSecret)}</code><button class="copy" data-copy="${esc(d.webhookSecret)}">Copy</button></div>` : ''}
+${(d.webhooks ?? []).length ? `<ul class="hooks">${(d.webhooks ?? []).map((w) => `<li><code>${esc(w.url)}</code> <span class="muted small">${esc(w.events.join(', '))}${w.enabled ? '' : ` · off: ${esc(w.disabled_reason ?? 'disabled')}`}</span><br>${form('test', w.id, 'Send a test')}${form('rotate', w.id, 'New secret')}${form('delete', w.id, 'Remove')}</li>`).join('')}</ul>` : ''}
+<form method="post" action="/me/webhooks/add"><p><input name="url" type="url" required placeholder="https://example.com/hooks/built-indie" aria-label="Webhook URL"> <input name="events" placeholder="Events: blank = all, or product.*, comment.created" aria-label="Events"> <button class="chip">Add webhook</button></p></form>
+<p class="muted small">Also from the CLI (<code>builtindie webhooks</code>), MCP (<code>create_webhook</code>) and <code>/api/v1/webhooks</code>.</p></div>`
 }
 
 export function makerPage(ctx: Ctx, d: { maker: Maker; products: Product[] }): string {
@@ -804,6 +819,8 @@ curl -X POST ${o}/api/v1/invites -H 'authorization: Bearer bi_…' -d '{"note":"
 curl -X POST ${o}/api/v1/products/&lt;slug&gt;/feature -H 'authorization: Bearer bi_…' -d '{"email":"you@…"}'   # pay: a CoinPay checkout_url (any coin or PayPal)
 curl ${o}/leaderboard/invites.json?period=week                       # top inviters (all|week|month)
 curl '${o}/api/v1/leaderboard?board=karma&amp;period=week'             # top karma (board karma|invites)
+curl -X POST ${o}/api/v1/webhooks -H 'authorization: Bearer bi_…' -d '{"url":"https://you.example/hooks","events":["product.*"]}'   # signed events about your listings; returns the secret
+curl ${o}/api/v1/webhooks -H 'authorization: Bearer bi_…'               # your endpoints + event_types; /:id/test, /:id/rotate, /deliveries
 curl ${o}/api/v1/karma -H 'authorization: Bearer bi_…'                   # your karma, history, next free Featured week
 curl ${o}/api/v1/products/&lt;slug&gt;/comments
 curl -X POST ${o}/api/v1/products/&lt;slug&gt;/comments -H 'authorization: Bearer bi_…' -d '{"body":"…","parent":"&lt;comment id, optional&gt;"}'
