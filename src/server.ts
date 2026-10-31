@@ -39,8 +39,8 @@ const CSP = [
   "default-src 'none'",
   "style-src 'self' 'unsafe-inline'",
   "script-src 'self' https://crawlproof.com",
-  // The shared footer's badges: ours is same-origin, pwamart's is not.
-  "img-src 'self' data: https://pwamart.com",
+  // The shared footer's publisher marks are served by OpenIcon HQ.
+  "img-src 'self' data: https://logicsrc.com https://pwamart.com",
   "connect-src 'self' https://crawlproof.com",
   'frame-src https://crawlproof.com https://www.youtube-nocookie.com https://player.vimeo.com https://www.loom.com',
   "manifest-src 'self'",

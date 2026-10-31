@@ -8,16 +8,21 @@
  * minutes (a footer release reaches us with no redeploy). A failed refresh keeps
  * the last good copy. Our CSP allows inline styles, so the template CSS stays on.
  */
-import { footerHtml, footerHtmlSync } from '@profullstack/footer'
+import { escapeHtml as escapeFooterHtml, footerHtml, footerHtmlSync } from '@profullstack/footer'
 
 type FooterOptions = Parameters<typeof footerHtmlSync>[0]
+const SITE = 'https://built.indie.pit.world/'
+const CURRENT_LISTING_HREF = `${SITE}__CURRENT_LISTING__`
 
 export function ringFooterOptions(links: { label: string; href: string }[]): FooterOptions {
   return {
-    site: 'https://built.indie.pit.world/',
+    site: SITE,
     links,
     since: 2026,
     tagline: 'Free, open source (MIT)',
+    pwamartHref: 'https://pwamart.com/publishers/profullstack',
+    // Replaced per request so product pages point their badge to their own listing.
+    builtIndieHref: CURRENT_LISTING_HREF,
   }
 }
 
@@ -29,9 +34,11 @@ export function setRingFooterOptions(next: FooterOptions): void {
   html = footerHtmlSync(next)
 }
 
-/** The footer markup, never empty once options are set. */
-export function ringFooter(): string {
-  return html
+/** The footer markup, with the built.indie badge pointing at this page's listing when there is one. */
+export function ringFooter(path = '/'): string {
+  const slug = /^\/p\/([a-z0-9-]+)(?:\/|$)/i.exec(path)?.[1]
+  const href = slug ? `${SITE}p/${slug}` : SITE
+  return html.replace(`href="${CURRENT_LISTING_HREF}"`, `href="${escapeFooterHtml(href)}"`)
 }
 
 /** Accept a rendered footer only when it still links the ring. */
