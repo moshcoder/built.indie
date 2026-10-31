@@ -427,13 +427,21 @@ function productJsonLd(origin: string, p: Product, reviews: ReviewView[]): strin
   return `<script type="application/ld+json">${JSON.stringify(data).replace(/</g, '\\u003c')}</script>`
 }
 
-export function badgeSnippet(origin: string, p: Product): string {
-  return `<a href="${origin}/p/${p.slug}?ref=badge"><img src="${origin}/badge/${p.slug}.svg" alt="${p.name} on built.indie" width="200" height="44"></a>`
+export function badgeSnippet(origin: string, p: Product, shape: 'wide' | 'square' = 'wide', theme: 'dark' | 'light' = 'dark'): string {
+  const query = [shape === 'square' ? 'shape=square' : '', theme === 'light' ? 'theme=light' : ''].filter(Boolean).join('&')
+  const src = `${origin}/badge/${p.slug}.svg${query ? `?${query}` : ''}`
+  const size = shape === 'square' ? 128 : 200
+  const height = shape === 'square' ? 128 : 44
+  const alt = shape === 'square' ? 'built.indie' : `${p.name} on built.indie`
+  return `<a href="${origin}/p/${p.slug}?ref=badge"><img src="${src}" alt="${esc(alt)}" width="${size}" height="${height}"></a>`
 }
 
 /** The badge with this account's badge id on it: placed on the homepage, it claims the listing (and earns the ✓). */
-export function claimBadgeSnippet(origin: string, p: Product, badgeId: string): string {
-  return `<a href="${origin}/p/${p.slug}"><img src="${origin}/images.svg?id=${badgeId}" alt="Launched on built.indie" width="200" height="44"></a>`
+export function claimBadgeSnippet(origin: string, p: Product, badgeId: string, shape: 'wide' | 'square' = 'wide'): string {
+  const query = `id=${badgeId}${shape === 'square' ? '&shape=square' : ''}`
+  const size = shape === 'square' ? 128 : 200
+  const height = shape === 'square' ? 128 : 44
+  return `<a href="${origin}/p/${p.slug}"><img src="${origin}/images.svg?${query}" alt="Launched on built.indie" width="${size}" height="${height}"></a>`
 }
 
 /** "Built with", from the product's own OpenStack.md. */
@@ -508,6 +516,11 @@ ${commentsHtml(ctx, p, d.comments ?? [])}
   <p><img src="/badge/${esc(p.slug)}.svg" alt="badge" width="200" height="44"> <img src="/badge/${esc(p.slug)}.svg?theme=light" alt="badge, light" width="200" height="44"></p>
   <pre><code>${esc(badgeSnippet(ctx.origin, p))}</code></pre>
   <div class="row"><button class="chip" data-copy="${esc(badgeSnippet(ctx.origin, p))}">Copy badge HTML</button><form method="post" action="/p/${esc(p.slug)}/verify"><button class="chip">I added it: check</button></form></div>
+  <h3 class="mini-h">Square built.indie footer badge</h3>
+  <p class="muted small">This square SVG uses the built.indie brand mark. Add it to your footer, profile, or README; the listing link still verifies.</p>
+  <p><img src="/badge/${esc(p.slug)}.svg?shape=square" alt="built.indie square badge" width="96" height="96"> <img src="/badge/${esc(p.slug)}.svg?shape=square&amp;theme=light" alt="built.indie square badge, light" width="96" height="96"></p>
+  <pre><code>${esc(badgeSnippet(ctx.origin, p, 'square'))}</code></pre>
+  <div class="row"><button class="chip" data-copy="${esc(badgeSnippet(ctx.origin, p, 'square'))}">Copy square badge HTML</button><button class="chip" data-copy="${esc(badgeSnippet(ctx.origin, p, 'square', 'light'))}">Copy light square badge HTML</button></div>
 </details>
 ${d.payments || d.canEdit ? `<details class="card" id="feature"${d.canEdit && (d.credits || d.daysBalance) ? ' open' : ''}><summary>Feature it: ${esc(`$${d.featureUsd}`)} for ${d.featureDays} days, or free with an invite</summary>
   <p class="muted">Pinned above today’s board on the homepage for ${d.featureDays} days.</p>
@@ -572,23 +585,30 @@ ${d.error ? `<p class="note error" role="alert">${esc(d.error.message)}</p>` : '
  * access to the domain's DNS. Everything it needs is in it: the exact record,
  * where it goes, how to check it took, and how to finish the claim.
  */
-export function claimMarkdown(origin: string, p: Product, record: { name: string; value: string }, badge: string): string {
+export function claimMarkdown(origin: string, p: Product, record: { name: string; value: string }, badge: string, squareBadge = ''): string {
   const bare = p.domain.replace(/^www\./, '')
   const label = record.name.slice(0, -(bare.length + 1))
   const id = badge.match(/images\.svg\?id=([A-Za-z0-9_-]+)/)?.[1] ?? ''
+  const square = squareBadge || claimBadgeSnippet(origin, p, id, 'square')
   return `# Claim ${p.name} on built.indie: the badge on the homepage, or one DNS TXT record
 
 Prove control of \`${bare}\` so the listing ${origin}/p/${p.slug} can be claimed and edited. Either proof works; the badge is the easy one.
 
 ## Option A (easiest): the badge on the homepage
 
-Put this HTML on the homepage, ${p.url}, and deploy it:
+Put either badge HTML on the homepage, ${p.url}, and deploy it. Both carry the same account-specific verification id:
 
 \`\`\`html
 ${badge}
 \`\`\`
 
-It shows the live built.indie badge, and its id (\`${id}\`) is unique to this listing and this built.indie account, so finding it on the homepage proves the site is yours. It also makes your link on built.indie a followed link and earns the ✓, in the same step. The badge must be served in the HTML of the homepage itself (not added later by JavaScript). Check with:
+Square built.indie brand version:
+
+\`\`\`html
+${square}
+\`\`\`
+
+It shows the built.indie brand badge, and its id (\`${id}\`) is unique to this listing and this built.indie account, so finding it on the homepage proves the site is yours. It also makes your link on built.indie a followed link and earns the ✓, in the same step. The badge must be served in the HTML of the homepage itself (not added later by JavaScript). Check with:
 
 \`\`\`sh
 curl -s ${p.url} | grep -o 'images.svg?id=[A-Za-z0-9_-]*'
@@ -635,9 +655,9 @@ We check DNS, then the homepage. The badge id and the record are tied to one bui
 }
 
 
-export function claimPage(ctx: Ctx, d: { product: Product; record: { name: string; value: string }; badge: string; owner: boolean; result?: { ok: boolean; looked: string[]; method?: string } }): string {
+export function claimPage(ctx: Ctx, d: { product: Product; record: { name: string; value: string }; badge: string; squareBadge: string; owner: boolean; result?: { ok: boolean; looked: string[]; method?: string } }): string {
   const p = d.product
-  const md = claimMarkdown(ctx.origin, p, d.record, d.badge)
+  const md = claimMarkdown(ctx.origin, p, d.record, d.badge, d.squareBadge)
   const done = d.owner || d.result?.ok
   return layout({
     ctx,
@@ -652,10 +672,14 @@ ${d.result && !d.result.ok ? `<p class="note error" role="alert">We did not find
 <p class="muted">Prove you control <b>${esc(p.domain)}</b>, either way: put your badge on the homepage (easiest), or add a TXT record at your DNS host. Then check.</p>
 <div class="card" id="badge-claim">
   <h2 class="mini-h">1. The badge on your homepage (easiest)</h2>
-  <p class="muted small">Put this badge on <b>${esc(p.url)}</b> and deploy. Its id is yours alone, so it proves the site is yours, and it also makes your link here a followed link and earns the ✓, in one step. It must be in the page’s HTML, not added by JavaScript.</p>
+  <p class="muted small">Put either badge on <b>${esc(p.url)}</b> and deploy. Both use your unique id, so they prove the site is yours, make your link here a followed link, and earn the ✓ in one step. They must be in the page’s HTML, not added by JavaScript.</p>
   <p><img src="/badge/${esc(p.slug)}.svg" alt="badge" width="200" height="44"></p>
   <pre><code>${esc(d.badge)}</code></pre>
   <div class="row"><button class="chip" data-copy="${esc(d.badge)}">Copy badge HTML</button></div>
+  <p class="muted small">Square built.indie brand badge:</p>
+  <p><img src="/badge/${esc(p.slug)}.svg?shape=square" alt="built.indie square badge" width="96" height="96"></p>
+  <pre><code>${esc(d.squareBadge)}</code></pre>
+  <div class="row"><button class="chip" data-copy="${esc(d.squareBadge)}">Copy square badge HTML</button></div>
 </div>
 <div class="card">
   <h2 class="mini-h">2. Or a DNS record</h2>
@@ -828,7 +852,7 @@ curl -X DELETE ${o}/api/v1/comments/&lt;id&gt; -H 'authorization: Bearer bi_…'
 curl ${o}/api/v1/products/&lt;slug&gt;/reviews
 curl -X POST ${o}/api/v1/products/&lt;slug&gt;/reviews -H 'authorization: Bearer bi_…' -d '{"rating":5,"body":"…"}'
 curl -X POST ${o}/api/v1/products/&lt;slug&gt;/share -H 'authorization: Bearer bi_…' -d '{"network":"bluesky"}'   # x|bluesky|linkedin|reddit|hn|mastodon|copy</pre>
-<p class="muted small">Claiming, the easy way: the badge. <code>GET …/claim</code> answers a <code>badge</code> snippet next to the DNS <code>record</code>; put it on your homepage (<code>&lt;img src="${o}/images.svg?id=&lt;id&gt;"&gt;</code>, the id is yours for that listing) and the <code>POST</code> answers <code>{"claimed": true, "method": "badge"}</code>. It also earns the followed link and the ✓ in the same step.</p>
+<p class="muted small">Claiming, the easy way: the badge. <code>GET …/claim</code> answers a wide <code>badge</code> and square <code>squareBadge</code> snippet next to the DNS <code>record</code>; put either on your homepage (<code>&lt;img src="${o}/images.svg?id=&lt;id&gt;"&gt;</code> or add <code>&amp;shape=square</code>, the id is yours for that listing) and the <code>POST</code> answers <code>{"claimed": true, "method": "badge"}</code>. It also earns the followed link and the ✓ in the same step.</p>
 <p class="muted small">OpenSite (logicsrc.com/docs/opensite): <code>GET /api/v1/sites?url=…</code>, <code>POST /api/v1/sites</code>, and every product at <code>/p/&lt;slug&gt;/opensite.json</code>. OpenProfile: <code>/p/&lt;slug&gt;/openprofile.md</code>, <code>/makers/&lt;id&gt;/openprofile.md</code>.</p></div>
 <div class="card" id="cli"><h2>CLI and TUI</h2>
 <pre>curl -fsSL ${o}/install.sh | sh                # installs builtindie
@@ -989,9 +1013,23 @@ export function messagePage(ctx: Ctx, d: { title: string; message: string; statu
   return layout({ ctx, title: `${d.title} · built.indie`, description: d.message, path: '/', noindex: true, body: `<section class="hero"><h1>${esc(d.title)}</h1><p class="lede">${esc(d.message)}</p><a class="btn" href="/">Home</a></section>` })
 }
 
+/** The built.indie square mark used by footer, listing, and claim badges. */
+function squareBrandBadgeSvg(theme: 'dark' | 'light'): string {
+  const dark = theme === 'dark'
+  const bg = dark ? '#111018' : '#ffffff'
+  const fg = dark ? '#f4f1ff' : '#14121c'
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="built.indie">
+<title>built.indie</title>
+<rect x=".75" y=".75" width="126.5" height="126.5" rx="27" fill="${bg}" stroke="#ff5c39" stroke-width="1.5"/>
+<path d="M16 4 5 17h7v11h8V17h7z" transform="translate(19 11) scale(2.8)" fill="#ff5c39"/>
+<text x="64" y="111" text-anchor="middle" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="12" font-weight="800" fill="${fg}">built.indie</text>
+</svg>`
+}
+
 /** The embeddable badge: live upvotes, or the day's award once it is won. */
 /** The badge for a site with no listing (the shared footer asks for every site): an invitation to launch. */
-export function launchBadgeSvg(theme: 'dark' | 'light'): string {
+export function launchBadgeSvg(theme: 'dark' | 'light', shape: 'wide' | 'square' = 'wide'): string {
+  if (shape === 'square') return squareBrandBadgeSvg(theme)
   const dark = theme === 'dark'
   return `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="44" viewBox="0 0 200 44" role="img" aria-label="Launch yours on built.indie">
 <rect x=".5" y=".5" width="199" height="43" rx="9" fill="${dark ? '#111018' : '#ffffff'}" stroke="#ff5c39"/>
@@ -1001,7 +1039,8 @@ export function launchBadgeSvg(theme: 'dark' | 'light'): string {
 </svg>`
 }
 
-export function badgeSvg(p: Product, award: { day: string; rank: number } | null, theme: 'dark' | 'light'): string {
+export function badgeSvg(p: Product, award: { day: string; rank: number } | null, theme: 'dark' | 'light', shape: 'wide' | 'square' = 'wide'): string {
+  if (shape === 'square') return squareBrandBadgeSvg(theme)
   const dark = theme === 'dark'
   const bg = dark ? '#111018' : '#ffffff'
   const fg = dark ? '#f4f1ff' : '#14121c'
