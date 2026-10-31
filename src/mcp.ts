@@ -90,7 +90,7 @@ export function createMcpServer(client = new BuiltIndieClient()): McpServer {
   )
   server.tool(
     'claim_product',
-    'Claim a listing for its domain owner (needs BUILTINDIE_KEY). Two proofs, either works. Easiest: put the `badge` HTML on the product homepage; it is <img src="https://built.indie.pit.world/images.svg?id=<id>"> with an id unique to this listing and this account, and it also earns the followed link and the ✓. Or add the DNS TXT `record`. Also returns `markdown`: step-by-step instructions for whoever has site or DNS access. Call again once either is live; claimed comes back true with `method` badge or dns.',
+    'Claim a listing for its domain owner (needs BUILTINDIE_KEY). Two proofs, either works. Easiest: put the `badge` or square `squareBadge` HTML on the product homepage; both use the built.indie brand mark and an id unique to this listing and account, and earn the followed link and ✓. Or add the DNS TXT `record`. Also returns `markdown`: step-by-step instructions for whoever has site or DNS access. Call again once either is live; claimed comes back true with `method` badge or dns.',
     { slug },
     wrap((a: { slug: string }) => client.claim(a.slug)),
   )

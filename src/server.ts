@@ -351,9 +351,10 @@ export function createApp(deps: Deps) {
   // Claiming: the domain's owner proves it with the badge carrying their badge id, or in DNS, and takes the listing.
   const claimRecord = (p: Product, user: User) => ({ type: 'TXT', name: `${CLAIM_LABEL}.${p.domain.replace(/^www\./, '')}`, value: `${CLAIM_PREFIX}${service.claimToken(p, user)}` })
   const claimBadge = (p: Product, user: User) => claimBadgeSnippet(origin, p, store.badgeId(p.id, user.id))
-  const claimMd = (p: Product, user: User) => claimMarkdown(origin, p, claimRecord(p, user), claimBadge(p, user))
+  const claimSquareBadge = (p: Product, user: User) => claimBadgeSnippet(origin, p, store.badgeId(p.id, user.id), 'square')
+  const claimMd = (p: Product, user: User) => claimMarkdown(origin, p, claimRecord(p, user), claimBadge(p, user), claimSquareBadge(p, user))
   const claimView = (c: Context<Env>, p: Product, user: User, extra: { result?: { ok: boolean; looked: string[]; method?: string } } = {}, status = 200) =>
-    page(c, claimPage(ctxOf(c), { product: p, record: claimRecord(p, user), badge: claimBadge(p, user), owner: p.ownerId === user.id, ...extra }), status)
+    page(c, claimPage(ctxOf(c), { product: p, record: claimRecord(p, user), badge: claimBadge(p, user), squareBadge: claimSquareBadge(p, user), owner: p.ownerId === user.id, ...extra }), status)
   // The same instructions as Markdown, to paste to an AI agent with DNS access.
   app.get('/p/:slug/claim.md', (c) => {
     const user = sessionUser(c)
@@ -721,9 +722,11 @@ export function createApp(deps: Deps) {
 
   // The badge: the viral part. Cached briefly so the count stays live.
   const badgeImage = (c: Context<Env>, p: Product | null, unlisted = false) => {
-    if (!p && unlisted) return c.body(launchBadgeSvg(c.req.query('theme') === 'light' ? 'light' : 'dark'), 200, { 'content-type': 'image/svg+xml; charset=utf-8', 'cache-control': 'public, max-age=3600', 'access-control-allow-origin': '*', 'cross-origin-resource-policy': 'cross-origin', 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'" })
+    const theme = c.req.query('theme') === 'light' ? 'light' : 'dark'
+    const shape = c.req.query('shape') === 'square' ? 'square' : 'wide'
+    if (!p && unlisted) return c.body(launchBadgeSvg(theme, shape), 200, { 'content-type': 'image/svg+xml; charset=utf-8', 'cache-control': 'public, max-age=3600', 'access-control-allow-origin': '*', 'cross-origin-resource-policy': 'cross-origin', 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'" })
     if (!p) return c.body('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>', 404, { 'content-type': 'image/svg+xml' })
-    return c.body(badgeSvg(p, store.awards(p.id), c.req.query('theme') === 'light' ? 'light' : 'dark'), 200, {
+    return c.body(badgeSvg(p, store.awards(p.id), theme, shape), 200, {
       'content-type': 'image/svg+xml; charset=utf-8',
       'cache-control': 'public, max-age=300',
       'access-control-allow-origin': '*',
@@ -965,7 +968,7 @@ export function createApp(deps: Deps) {
     if (!user) return c.json(NEEDS_ACCOUNT, 401)
     const p = store.bySlug(c.req.param('slug'))
     if (!p || p.status === 'hidden') return c.json({ error: 'no such product' }, 404)
-    return c.json({ owner: p.ownerId === user.id, record: claimRecord(p, user), badge: claimBadge(p, user), markdown: claimMd(p, user) })
+    return c.json({ owner: p.ownerId === user.id, record: claimRecord(p, user), badge: claimBadge(p, user), squareBadge: claimSquareBadge(p, user), markdown: claimMd(p, user) })
   })
   app.post('/api/v1/products/:slug/claim', async (c) => {
     const user = apiUser(c)
@@ -974,7 +977,7 @@ export function createApp(deps: Deps) {
     if (!p || p.status === 'hidden') return c.json({ error: 'no such product' }, 404)
     if (!readLimit.allow(`read:${ip(c)}`)) return c.json({ error: 'too many checks; wait a few minutes' }, 429)
     const r = await service.claim(p, user)
-    return c.json({ claimed: r.ok, ...(r.method ? { method: r.method } : {}), looked: r.looked, record: claimRecord(p, user), badge: claimBadge(p, user), ...(r.ok ? {} : { markdown: claimMd(p, user) }) })
+    return c.json({ claimed: r.ok, ...(r.method ? { method: r.method } : {}), looked: r.looked, record: claimRecord(p, user), badge: claimBadge(p, user), squareBadge: claimSquareBadge(p, user), ...(r.ok ? {} : { markdown: claimMd(p, user) }) })
   })
   mountProfileRoutes(app, {
     store: profiles.store,

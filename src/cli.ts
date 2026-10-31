@@ -234,7 +234,7 @@ export async function main(argv = process.argv.slice(2), out: Out = console, cli
         }
         const r = await client.claim(slug)
         if (r.claimed) return show(r, `${slug} is yours ✓${r.method === 'badge' ? ' (we found your badge)' : r.method === 'dns' ? ' (we found your DNS record)' : ''}. Edit it: builtindie edit ${slug} --tagline "…"`), 0
-        show(r, `Prove it either way, then run builtindie claim ${slug} again:\n\n1. Easiest: put this badge on your homepage and deploy (its id is yours; it also earns the followed link and the ✓):\n\n  ${r.badge}\n\n2. Or add this DNS record (wait a minute for it to show):\n\n  type   TXT\n  name   ${r.record.name}\n  value  ${r.record.value}\n\n(not found yet at ${r.looked.join(', ')})`)
+        show(r, `Prove it either way, then run builtindie claim ${slug} again:\n\n1. Easiest: put this built.indie badge on your homepage and deploy (its id is yours; it also earns the followed link and the ✓):\n\n  ${r.badge}\n\nSquare brand badge:\n\n  ${r.squareBadge}\n\n2. Or add this DNS record (wait a minute for it to show):\n\n  type   TXT\n  name   ${r.record.name}\n  value  ${r.record.value}\n\n(not found yet at ${r.looked.join(', ')})`)
         return 1
       }
       case 'me': {
