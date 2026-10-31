@@ -39,7 +39,7 @@
 
     "@profullstack/emailer": ["@profullstack/emailer@1.0.3", "", {}, "sha512-VyAtCcfnSI6LOwJvWogCr3ZNmEsaZw+iuWrqnosLsdcKsbRyCrCmXigMNZJZEjlgYlR+lK//PwNPG+xtCFvWAw=="],
 
-    "@profullstack/footer": ["@profullstack/footer@0.6.11", "", { "peerDependencies": { "react": ">=18" }, "optionalPeers": ["react"], "bin": { "profullstack-footer": "bin/profullstack-footer.js" } }, "sha512-9khfQbBM2p5cqMqUg8+K1atF2muYWA0AQaVI6C8gH6Cl+D+7Wc2zeaPmtDMque8HZzA3tdaqoCAAUfsufaL17Q=="],
+    "@profullstack/footer": ["@profullstack/footer@0.6.13", "", { "peerDependencies": { "react": ">=18" }, "optionalPeers": ["react"], "bin": { "profullstack-footer": "bin/profullstack-footer.js" } }, "sha512-eLBpC7wKyDsXa5afx7F+QdKtC5mhHDx+qVM7wrztwAZEP1cGFJcXhpr90O20Sn+o2s1z0+BppXJ4IB+v1f07PQ=="],
 
     "@profullstack/form-guard": ["@profullstack/form-guard@0.1.1", "", {}, "sha512-RGLGfQhjq40f+JqEhSmsJnS0I5sFWjYdrYx4VYtkUqz8xvioN2yyR+6uFK0mnDAStKrYytlngg3meUsrChm/OQ=="],
 

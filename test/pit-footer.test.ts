@@ -13,7 +13,7 @@ it('pit.world footer: nothing until read, then the last thing in <body>, kept on
   await new Promise((r) => setTimeout(r, 10))
   stop()
   const html = messagePage({ user: null, origin: 'https://built.indie' } as unknown as Ctx, { title: 'x', message: 'y' })
-  expect(html.match(/data-pit-footer/g)?.length).toBe(1)
+  expect(html.match(/<nav\b[^>]*\bdata-pit-footer\b/g)?.length).toBe(1)
   expect(html).toMatch(/<\/footer>[\s\S]*data-pit-footer[\s\S]*<\/nav>\s*<\/body>/)
   const stop2 = startPitFooterRefresh('built.indie', (async () => { throw new Error('down') }) as unknown as typeof fetch)
   await new Promise((r) => setTimeout(r, 10))
