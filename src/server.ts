@@ -45,7 +45,7 @@ const CSP = [
   'frame-src https://crawlproof.com https://www.youtube-nocookie.com https://player.vimeo.com https://www.loom.com',
   "manifest-src 'self'",
   "worker-src 'self'",
-  "form-action 'self' https://coinpayportal.com",
+  "form-action 'self' https://coinpayportal.com https://pit.world",
   "base-uri 'none'",
   "frame-ancestors 'none'",
 ].join('; ')
