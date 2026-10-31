@@ -447,10 +447,11 @@ describe('the site', () => {
     expect(await img.text()).toBe(await plain.text())
     const squareImg = await call(`/images.svg?id=${id}&shape=square`)
     const plainSquare = await call('/badge/acme.svg?shape=square')
+    const plainSquareSvg = await plainSquare.text()
     expect(squareImg.status).toBe(200)
-    expect(await squareImg.text()).toBe(await plainSquare.text())
+    expect(await squareImg.text()).toBe(plainSquareSvg)
     const squareLight = await call('/badge/acme.svg?shape=square&theme=light')
-    expect(await squareLight.text()).toBe(await plainSquare.text())
+    expect(await squareLight.text()).toBe(plainSquareSvg)
     expect((await call('/images.svg?id=nope')).status).toBe(404)
     expect((await call('/images.svg')).status).toBe(404)
     // An unknown id on the homepage does nothing.
