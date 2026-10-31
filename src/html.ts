@@ -428,7 +428,7 @@ function productJsonLd(origin: string, p: Product, reviews: ReviewView[]): strin
 }
 
 export function badgeSnippet(origin: string, p: Product, shape: 'wide' | 'square' = 'wide', theme: 'dark' | 'light' = 'dark'): string {
-  const query = [shape === 'square' ? 'shape=square' : '', theme === 'light' ? 'theme=light' : ''].filter(Boolean).join('&')
+  const query = shape === 'square' ? 'shape=square' : theme === 'light' ? 'theme=light' : ''
   const src = `${origin}/badge/${p.slug}.svg${query ? `?${query}` : ''}`
   const size = shape === 'square' ? 128 : 200
   const height = shape === 'square' ? 128 : 44
@@ -510,17 +510,17 @@ ${p.videos.length ? `<div class="videos">${p.videos.map((v) => (v.embed ? `<div 
 ${live ? `${reviewsHtml(ctx, p, d.reviews ?? [], d.myReview ?? null, Boolean(d.selfListing))}
 ${commentsHtml(ctx, p, d.comments ?? [])}
 <h2 class="section-h">Share it</h2>${share(ctx.origin, p)}
-<details class="card" id="badge"${p.verifiedAt || !d.canEdit ? '' : ' open'}>
+<details class="card" id="badge" open>
   <summary>Add the badge to your site</summary>
-  <p class="muted">Put this on your homepage. It shows your live upvote count, and once we see it your link here becomes a followed link and you get the ✓.</p>
+  <p class="muted">The wide badge shows your live upvote count. The square built.indie icon below links to this listing. Add either one to your site.</p>
   <p><img src="/badge/${esc(p.slug)}.svg" alt="badge" width="200" height="44"> <img src="/badge/${esc(p.slug)}.svg?theme=light" alt="badge, light" width="200" height="44"></p>
   <pre><code>${esc(badgeSnippet(ctx.origin, p))}</code></pre>
   <div class="row"><button class="chip" data-copy="${esc(badgeSnippet(ctx.origin, p))}">Copy badge HTML</button><form method="post" action="/p/${esc(p.slug)}/verify"><button class="chip">I added it: check</button></form></div>
-  <h3 class="mini-h">Square built.indie footer badge</h3>
-  <p class="muted small">This square SVG uses the built.indie brand mark. Add it to your footer, profile, or README; the listing link still verifies.</p>
-  <p><img src="/badge/${esc(p.slug)}.svg?shape=square" alt="built.indie square badge" width="96" height="96"> <img src="/badge/${esc(p.slug)}.svg?shape=square&amp;theme=light" alt="built.indie square badge, light" width="96" height="96"></p>
+  <h3 class="mini-h">Square built.indie icon badge</h3>
+  <p class="muted small">This is built.indie’s square brand icon, linked to this listing.</p>
+  <p><img src="/badge/${esc(p.slug)}.svg?shape=square" alt="built.indie square icon" width="96" height="96"></p>
   <pre><code>${esc(badgeSnippet(ctx.origin, p, 'square'))}</code></pre>
-  <div class="row"><button class="chip" data-copy="${esc(badgeSnippet(ctx.origin, p, 'square'))}">Copy square badge HTML</button><button class="chip" data-copy="${esc(badgeSnippet(ctx.origin, p, 'square', 'light'))}">Copy light square badge HTML</button></div>
+  <div class="row"><button class="chip" data-copy="${esc(badgeSnippet(ctx.origin, p, 'square'))}">Copy square icon HTML</button><form method="post" action="/p/${esc(p.slug)}/verify"><button class="chip">I added it: check</button></form></div>
 </details>
 ${d.payments || d.canEdit ? `<details class="card" id="feature"${d.canEdit && (d.credits || d.daysBalance) ? ' open' : ''}><summary>Feature it: ${esc(`$${d.featureUsd}`)} for ${d.featureDays} days, or free with an invite</summary>
   <p class="muted">Pinned above today’s board on the homepage for ${d.featureDays} days.</p>
@@ -1013,23 +1013,19 @@ export function messagePage(ctx: Ctx, d: { title: string; message: string; statu
   return layout({ ctx, title: `${d.title} · built.indie`, description: d.message, path: '/', noindex: true, body: `<section class="hero"><h1>${esc(d.title)}</h1><p class="lede">${esc(d.message)}</p><a class="btn" href="/">Home</a></section>` })
 }
 
-/** The built.indie square mark used by footer, listing, and claim badges. */
-function squareBrandBadgeSvg(theme: 'dark' | 'light'): string {
-  const dark = theme === 'dark'
-  const bg = dark ? '#111018' : '#ffffff'
-  const fg = dark ? '#f4f1ff' : '#14121c'
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="built.indie">
+/** The built.indie square mark, matching the public favicon. */
+function squareBrandBadgeSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 64 64" role="img" aria-label="built.indie">
 <title>built.indie</title>
-<rect x=".75" y=".75" width="126.5" height="126.5" rx="27" fill="${bg}" stroke="#ff5c39" stroke-width="1.5"/>
-<path d="M16 4 5 17h7v11h8V17h7z" transform="translate(19 11) scale(2.8)" fill="#ff5c39"/>
-<text x="64" y="111" text-anchor="middle" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="12" font-weight="800" fill="${fg}">built.indie</text>
+<rect width="64" height="64" rx="14" fill="#0b0a10"/>
+<path d="M32 9 11 35h14v20h14V35h14z" fill="#ff5c39"/>
 </svg>`
 }
 
 /** The embeddable badge: live upvotes, or the day's award once it is won. */
 /** The badge for a site with no listing (the shared footer asks for every site): an invitation to launch. */
 export function launchBadgeSvg(theme: 'dark' | 'light', shape: 'wide' | 'square' = 'wide'): string {
-  if (shape === 'square') return squareBrandBadgeSvg(theme)
+  if (shape === 'square') return squareBrandBadgeSvg()
   const dark = theme === 'dark'
   return `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="44" viewBox="0 0 200 44" role="img" aria-label="Launch yours on built.indie">
 <rect x=".5" y=".5" width="199" height="43" rx="9" fill="${dark ? '#111018' : '#ffffff'}" stroke="#ff5c39"/>
@@ -1040,7 +1036,7 @@ export function launchBadgeSvg(theme: 'dark' | 'light', shape: 'wide' | 'square'
 }
 
 export function badgeSvg(p: Product, award: { day: string; rank: number } | null, theme: 'dark' | 'light', shape: 'wide' | 'square' = 'wide'): string {
-  if (shape === 'square') return squareBrandBadgeSvg(theme)
+  if (shape === 'square') return squareBrandBadgeSvg()
   const dark = theme === 'dark'
   const bg = dark ? '#111018' : '#ffffff'
   const fg = dark ? '#f4f1ff' : '#14121c'
