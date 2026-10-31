@@ -40,7 +40,8 @@ const CSP = [
   "style-src 'self' 'unsafe-inline'",
   "script-src 'self' https://crawlproof.com",
   // The shared footer's publisher marks are served by OpenIcon HQ.
-  "img-src 'self' data: https://logicsrc.com https://pwamart.com",
+  // The shared footer's marks and copyright logo are remote images.
+  "img-src 'self' data: https://logicsrc.com https://pwamart.com https://profullstack.com",
   "connect-src 'self' https://crawlproof.com",
   'frame-src https://crawlproof.com https://www.youtube-nocookie.com https://player.vimeo.com https://www.loom.com',
   "manifest-src 'self'",

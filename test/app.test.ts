@@ -233,6 +233,7 @@ describe('the site', () => {
     expect((await call('/submit', form({ url: 'https://www.acme.test/' }))).headers.get('location')).toBe('/p/acme?existing=1')
     const homeResponse = await call('/')
     expect(homeResponse.headers.get('content-security-policy')).toContain('https://logicsrc.com')
+    expect(homeResponse.headers.get('content-security-policy')).toContain('https://profullstack.com')
     expect(homeResponse.headers.get('content-security-policy')).toContain("form-action 'self' https://coinpayportal.com https://pit.world")
     const home = await homeResponse.text()
     expect(home).toContain('/p/acme')
