@@ -117,7 +117,7 @@ ${RING_PLACEHOLDER}
 ${o.ads ? adUnit() : ''}
 ${o.body}
 </main>
-${ringFooter()}
+${ringFooter(o.path)}
 ${pitFooter()}
 </body>
 </html>`
