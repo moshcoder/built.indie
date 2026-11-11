@@ -29,6 +29,7 @@ import { VERSION } from './version.js'
 import { webhooksApi } from '@profullstack/webhooks'
 import { mountProfileRoutes, PROFILE_ENHANCE_SCRIPT, saveSignupProfile, validateProfile } from '@profullstack/profile'
 import { openProfiles } from './profile.js'
+import { promoBlock } from '@profullstack/cross-promo'
 
 export { VERSION }
 
@@ -142,11 +143,30 @@ export function createApp(deps: Deps) {
     board.invalidate()
     board.award(userId).catch((e) => console.error(`[karma] badges: ${(e as Error).message}`))
   }
+  // Every member email ends with the network block (@profullstack/cross-promo): sister directories
+  // and tools, from the live catalog, never built.indie itself.
+  const sendWithPromo = async (to: string, subject: string, text: string, html: string, tag: string) => {
+    if (!deps.mailer || isPlaceholder(to)) return
+    try {
+      const promo = await promoBlock({ site: 'built.indie.pit.world', audience: 'makers', seed: to })
+      await deps.mailer({ to, subject, text: promo.text ? `${text}\n\n${promo.text}` : text, html: html + promo.html })
+    } catch (e) {
+      console.error(`[${tag}] mail failed: ${(e as Error).message}`)
+    }
+  }
   service.karma.onCredit = (userId, granted) => {
     const u = store.user(userId)
-    if (!u || !deps.mailer) return
+    if (!u) return
     const text = `Your karma on built.indie crossed another ${service.karma.perCredit}: that is ${granted === 1 ? 'a free Featured week' : `${granted} free Featured weeks`} (${config.featureDays} days pinned on the homepage).\n\nUse it: ${origin}/invite\nYour karma: ${origin}/me#karma`
-    deps.mailer({ to: u.email, subject: 'Your karma earned a free Featured week on built.indie', text, html: `<p>${esc(text).replace(/\n/g, '<br>')}</p>` }).catch((e) => console.error(`[karma] mail failed: ${(e as Error).message}`))
+    void sendWithPromo(u.email, 'Your karma earned a free Featured week on built.indie', text, `<p>${esc(text).replace(/\n/g, '<br>')}</p>`, 'karma')
+  }
+  service.onLaunched = (submitterId, p) => {
+    const u = store.user(submitterId)
+    if (!u) return
+    const page = `${origin}/p/${p.slug}`
+    const text = `${p.name} is live on built.indie: ${page}\n\nShare it to climb today's board (one vote per visitor, the board resets at 00:00 UTC). Add the badge to your site for a dofollow link: ${page}/claim\n\nInvite another maker and you both get free Featured days: ${inviteLink(u)}`
+    const html = `<p><b>${esc(p.name)}</b> is live on built.indie: <a href="${page}">${page}</a></p><p>Share it to climb today's board (one vote per visitor, the board resets at 00:00 UTC). Add the badge to your site for a dofollow link: <a href="${page}/claim">${page}/claim</a></p><p><a href="${page}" style="display:inline-block;padding:10px 18px;background:#ff5c39;color:#fff;border-radius:8px;text-decoration:none;font-weight:700">See your listing</a></p><p>Invite another maker and you both get free Featured days: <a href="${inviteLink(u)}">${inviteLink(u)}</a></p>`
+    void sendWithPromo(u.email, `${p.name} is live on built.indie`, text, html, 'launch')
   }
   const inviteLink = (user: User) => `${origin}/i/${store.inviteCode(user.id)}`
   service.onInviteEarned = (inviterId, p) => {
@@ -154,11 +174,11 @@ export function createApp(deps: Deps) {
     // A projection is never record()ed, so badges are checked here, when the fact they rest on changes.
     board.award(inviterId).catch((e) => console.error(`[invite] badges: ${(e as Error).message}`))
     const inviter = store.user(inviterId)
-    if (!inviter || !deps.mailer) return
+    if (!inviter) return
     const credits = store.inviteStats(inviterId).credits
     const text = `${p.name} just launched on built.indie through your invite: ${origin}/p/${p.slug}\n\nThat earned you a free Featured week. You have ${credits} to use: ${origin}/invite\n\nKeep going: every maker you invite who launches earns another.`
     const html = `<p><b>${esc(p.name)}</b> just launched on built.indie through your invite: <a href="${origin}/p/${esc(p.slug)}">${origin}/p/${esc(p.slug)}</a></p><p>That earned you a free Featured week. You have <b>${credits}</b> to use.</p><p><a href="${origin}/invite" style="display:inline-block;padding:10px 18px;background:#ff5c39;color:#fff;border-radius:8px;text-decoration:none;font-weight:700">Use it</a></p>`
-    deps.mailer({ to: inviter.email, subject: `You earned a free Featured week on built.indie`, text, html }).catch((e) => console.error(`[invite] mail failed: ${(e as Error).message}`))
+    void sendWithPromo(inviter.email, `You earned a free Featured week on built.indie`, text, html, 'invite')
   }
 
   app.use('*', async (c, next) => {

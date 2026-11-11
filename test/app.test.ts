@@ -350,6 +350,37 @@ describe('the site', () => {
     expect((await call('/p/acme/edit', { headers: { cookie } })).headers.get('location')).toBe('/p/acme/claim')
   })
 
+  test('going live emails the signed-in submitter, with the network block and never built.indie itself', async () => {
+    process.env.CROSS_PROMO = 'bundled'
+    const { call, mail } = setup()
+    await call('/login', form({ email: 'sub@example.com' }))
+    const token = mail[0]!.text.match(/token=([\w-]+)/)![1]!
+    const cookie = (await call(`/auth/verify?token=${token}`)).headers.get('set-cookie')!.split(';')[0]!
+    await call('/submit', { ...form({ url: 'acme.test' }), headers: { ...form({}).headers, cookie } })
+    expect(mail).toHaveLength(1)
+    await call('/p/acme/edit', { ...form({ action: 'publish', name: 'Acme' }), headers: { ...form({}).headers, cookie } })
+    await new Promise((r) => setTimeout(r, 20))
+    const live = mail.find((m) => m.subject === 'Acme is live on built.indie')!
+    expect(live.to).toBe('sub@example.com')
+    expect(live.text).toContain('/p/acme')
+    expect(live.text).toContain('pwamart.com/console/submit')
+    expect(live.text).toContain('saasrow.pwa.pit.world/submit')
+    expect(live.text).toContain('utm_source=built.indie.pit.world')
+    expect(live.text).not.toContain('built.indie.pit.world/submit')
+    expect(live.html).toContain('List it free in more places')
+    // Editing a live listing again does not re-send it.
+    await call('/p/acme/edit', { ...form({ action: 'publish', name: 'Acme 2' }), headers: { ...form({}).headers, cookie } })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(mail.filter((m) => /is live on built\.indie/.test(m.subject))).toHaveLength(1)
+  })
+
+  test('an anonymous launch sends no email', async () => {
+    const { call, mail } = setup()
+    await call('/submit', form({ url: 'acme.test' }))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(mail).toHaveLength(0)
+  })
+
   test('the badge works as a claim: the right token claims and earns the ✓; another account or no token does not; DNS still wins first', async () => {
     let home = HOME
     const web = fakeWeb({ 'https://acme.test/': () => new Response(home, { headers: { 'content-type': 'text/html' } }) })
