@@ -29,6 +29,9 @@ setRingFooterOptions(
 
 /** crawlproof analytics on every page (project 71b194a4…); CRAWLPROOF_SITE=off turns it off. */
 const TRACK_SITE = process.env.CRAWLPROOF_SITE ?? '71b194a4-9ae7-4b79-9ec1-0cf0d5ef203e'
+// WebMCP (@profullstack/webmcp): site_info, open_page, search_site (the JSON search API) and the
+// annotated forms below as tools for the AI agent in the visitor's browser.
+const WEBMCP = `<script type="module" data-webmcp src="https://cdn.jsdelivr.net/npm/@profullstack/webmcp@0/src/embed.js" data-search-api="/api/v1/search?q={query}&limit={limit}&facets=0" data-search="/search?q={query}" data-pages='{"browse":"/search","new":"/new","tags":"/tags","leaderboard":"/leaderboard","launch":"/submit","help":"/help","account":"/me"}'></script>`
 const TRACKER = TRACK_SITE === 'off' ? '' : `<script data-site="${TRACK_SITE}" src="https://crawlproof.com/stats.js" async></script>`
 
 /**
@@ -90,12 +93,13 @@ ${o.head ?? ''}
 <link rel="stylesheet" href="${STYLE_URL}">
 <script src="${SCRIPT_URL}" defer></script>
 ${TRACKER}
+${WEBMCP}
 </head>
 <body>
 ${RING_PLACEHOLDER}
 <header class="top${o.wide ? ' wide' : ''}">
   <a class="brand" href="/">${LOGO}<span>built<b>.</b>indie</span></a>
-  <form class="top-search" role="search" method="get" action="/search" data-suggest>
+  <form class="top-search" role="search" method="get" action="/search" data-suggest toolname="search_launches" tooldescription="Search launched indie products by name, tag or maker and show the results page" toolautosubmit>
     <label class="sr" for="site-q">Search launches</label>
     <input id="site-q" name="q" type="search" placeholder="Search apps, tags, makers…" value="${esc(o.q ?? '')}" autocomplete="off" maxlength="80" enterkeyhint="search" aria-autocomplete="list" aria-controls="site-suggest"><kbd aria-hidden="true">/</kbd>
     <div class="suggest" id="site-suggest" role="listbox" hidden></div>
@@ -158,7 +162,7 @@ function row(ctx: Ctx, p: Product, rank?: number): string {
 const board = (ctx: Ctx, products: Product[], ranked = true) => (products.length ? `<ol class="board">${products.map((p, i) => row(ctx, p, ranked ? i + 1 : undefined)).join('')}</ol>` : '')
 
 function submitForm(compact = false, values: Record<string, string> = {}, error?: { message: string; field?: string }): string {
-  return `<form class="submit-form${compact ? ' compact' : ''}" method="post" action="/submit" data-busy="Reading the homepage, llms.txt and manifest, saving the logo and screenshots…">
+  return `<form class="submit-form${compact ? ' compact' : ''}" method="post" action="/submit" toolname="launch_product" tooldescription="Fill in the launch form with a product's homepage URL (and optional maker name / OpenProfile URL); the person presses Launch it" data-busy="Reading the homepage, llms.txt and manifest, saving the logo and screenshots…">
   ${error ? `<p class="note error" role="alert">${esc(error.message)}</p>` : ''}
   <label for="url"${compact ? ' class="sr"' : ''}>Your product’s URL</label>
   <div class="url-row"><input id="url" name="url" type="text" inputmode="url" autocomplete="url" placeholder="yourproduct.com" required value="${esc(values.url ?? '')}"${error?.field === 'url' ? ' aria-invalid="true"' : ''}><button class="btn">Launch it</button></div>
