@@ -38,7 +38,7 @@ export const PUBLIC_ORIGIN = 'https://built.indie.pit.world'
 const CSP = [
   "default-src 'none'",
   "style-src 'self' 'unsafe-inline'",
-  "script-src 'self' https://crawlproof.com",
+  "script-src 'self' https://crawlproof.com https://cdn.jsdelivr.net",
   // The shared footer's publisher marks are served by OpenIcon HQ.
   // The shared footer's marks and copyright logo are remote images.
   "img-src 'self' data: https://logicsrc.com https://pwamart.com https://profullstack.com",
