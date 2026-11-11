@@ -8,6 +8,7 @@
         "@modelcontextprotocol/sdk": "^1.32.2",
         "@profullstack/affiliates": "0.1.0",
         "@profullstack/coinpay-onboard": "0.2.0",
+        "@profullstack/cross-promo": "^0.1.0",
         "@profullstack/footer": "latest",
         "@profullstack/hqtui": "^0.11.1",
         "@profullstack/leaderboard": "^0.3.1",
@@ -36,6 +37,8 @@
     "@profullstack/affiliates": ["@profullstack/affiliates@0.1.0", "", { "dependencies": { "@profullstack/referrals": "^0.1.0" }, "bin": { "affiliates": "dist/cli.js" } }, "sha512-cwr1n6ePFszP1UieelL3M1kb5INJ6bSG/BBwC13NhKYCYufU+MsEpTnDnpLMXF/jyZTe8IJBR2P1JJ0EmBU9og=="],
 
     "@profullstack/coinpay-onboard": ["@profullstack/coinpay-onboard@0.2.0", "", { "dependencies": { "@modelcontextprotocol/sdk": "^1.17.0", "zod": "^3.25.0" }, "bin": { "coinpay-onboard": "bin/coinpay-onboard" } }, "sha512-FxIiTefcAswyCyEapEcC+vSai3IZcOPPxaBGnT7L/VPGfZJYjH1kHoN6DCRMBQx0l2IbJ2aDLqrYUhqRUaI2cA=="],
+
+    "@profullstack/cross-promo": ["@profullstack/cross-promo@0.1.0", "", { "bin": { "cross-promo": "bin/cross-promo.js" } }, "sha512-LQMxZSvApH1T+8WmMu/Nj1LqojXeTw6wAtpLfhuKFwx9eR36hQG/7vVIDkKpmU5zKw7UwARe20MOfFCak2+ejA=="],
 
     "@profullstack/emailer": ["@profullstack/emailer@1.0.3", "", {}, "sha512-VyAtCcfnSI6LOwJvWogCr3ZNmEsaZw+iuWrqnosLsdcKsbRyCrCmXigMNZJZEjlgYlR+lK//PwNPG+xtCFvWAw=="],
 

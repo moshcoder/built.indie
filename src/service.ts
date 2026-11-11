@@ -362,7 +362,10 @@ export class BuiltIndie {
     this.karma.launched(live)
     // A claim made while it was a draft pays once it is live.
     if (live.ownerId) this.karma.claimed(live, live.ownerId)
-    if (p.status !== 'live') this.hook(ownerOf(live), 'product.launched', live)
+    if (p.status !== 'live') {
+      this.hook(ownerOf(live), 'product.launched', live)
+      if (p.submitterUser) this.onLaunched?.(p.submitterUser, live)
+    }
     // An invited member's first live listing earns whoever invited them a free Featured week.
     const inviter = p.submitterUser ? this.store.earnInvite(p.submitterUser, p.id) : null
     if (inviter) {
@@ -434,6 +437,9 @@ export class BuiltIndie {
     if (!(SHARE_NETWORKS as readonly string[]).includes(network)) throw new InputError(`network is one of ${SHARE_NETWORKS.join(', ')}`, 'network')
     return { counted: this.karma.shared(p, user?.id ?? null, network) }
   }
+
+  /** Called once when a signed-in member's listing first goes live: the server mails them a confirmation. */
+  onLaunched?: (submitterId: string, product: Product) => void
 
   /** Called when a listing earns its submitter's inviter a credit: the server mails them and refreshes the board. */
   onInviteEarned?: (inviterId: string, product: Product) => void
