@@ -77,7 +77,7 @@ function layout(o: LayoutOptions): string {
 <meta property="og:title" content="${esc(o.title)}">
 <meta property="og:description" content="${esc(o.description)}">
 <meta property="og:url" content="${esc(url)}">
-${o.image && !o.adult ? `<meta property="og:image" content="${esc(o.image)}"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:image" content="${esc(o.image)}">` : '<meta name="twitter:card" content="summary">'}
+${o.adult ? '<meta name="twitter:card" content="summary">' : o.image ? `<meta property="og:image" content="${esc(o.image)}"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:image" content="${esc(o.image)}">` : `<meta property="og:image" content="${esc(o.ctx.origin)}/og.png"><meta property="og:image:type" content="image/png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:alt" content="built.indie: launch your indie product with one URL"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:image" content="${esc(o.ctx.origin)}/og.png">`}
 <meta name="referrer" content="strict-origin-when-cross-origin">
 <meta name="color-scheme" content="dark light">
 <meta name="theme-color" content="#0b0a10">

@@ -260,7 +260,7 @@ export function createApp(deps: Deps) {
 
   // Static files.
   const TYPES: Record<string, string> = { css: 'text/css; charset=utf-8', js: 'text/javascript; charset=utf-8', svg: 'image/svg+xml', png: 'image/png', crt: 'application/x-x509-ca-cert', webmanifest: 'application/manifest+json' }
-  app.get('/:file{(style\\.css|app\\.js|sw\\.js|favicon\\.svg|icon-192\\.png|icon-512\\.png|manifest\\.webmanifest|moshpit-root-ca\\.crt)}', async (c) => {
+  app.get('/:file{(style\\.css|app\\.js|sw\\.js|favicon\\.svg|icon-192\\.png|icon-512\\.png|og\\.png|manifest\\.webmanifest|moshpit-root-ca\\.crt)}', async (c) => {
     const name = c.req.param('file')
     const file = Bun.file(new URL(`../public/${name}`, import.meta.url))
     const fresh = name === 'sw.js' || name === 'manifest.webmanifest'
