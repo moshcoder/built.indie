@@ -1121,3 +1121,16 @@ describe('customer webhooks (@profullstack/webhooks)', () => {
     void app
   })
 })
+
+describe('share card', () => {
+  test('pages without their own picture carry the site card, and /og.png serves it', async () => {
+    const { call } = setup()
+    const html = await (await call('/')).text()
+    expect(html).toContain('<meta property="og:image" content="https://built.indie.pit.world/og.png">')
+    expect(html).toContain('<meta name="twitter:card" content="summary_large_image">')
+    const png = await call('/og.png')
+    expect(png.status).toBe(200)
+    expect(png.headers.get('content-type')).toBe('image/png')
+    expect(dimensions(new Uint8Array(await png.arrayBuffer()), 'png')).toEqual({ width: 1200, height: 630 })
+  })
+})
