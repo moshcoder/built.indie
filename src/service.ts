@@ -24,7 +24,7 @@ import { Resolver } from 'node:dns/promises'
 import { keyedSection, listSection, makeOpenProfile, renderOpenProfile } from '@profullstack/openprofile'
 import { autofetch, clip, FetchError, normalizeUrl, readProfile, safeFetch, SOCIAL_KINDS, videoFrom, type FetchOptions, type SiteInfo, type Video } from './fetch.js'
 import { Media, screenshot } from './media.js'
-import { dayOf, makerIdFor, newId, Store, type Comment, type Product, type Review, type User } from './db.js'
+import { ADULT, dayOf, makerIdFor, newId, Store, type Comment, type Product, type Review, type User } from './db.js'
 import { Karma, ownerOf, SHARE_NETWORKS } from './karma.js'
 import { cleanTags } from './tags.js'
 import { validEmail } from './auth.js'
@@ -50,6 +50,9 @@ const REDEEM_REASONS: Record<string, string> = {
 
 /** What built.indie tells a maker's webhooks about: things that happen to the listings they own. */
 export const WEBHOOK_EVENTS = ['product.launched', 'product.claimed', 'product.verified', 'product.featured', 'product.upvoted', 'comment.created', 'review.created', 'invite.earned']
+
+/** What an anonymous visitor is told wherever the Adult (18+) category is asked for. */
+export const ADULT_NEEDS_ACCOUNT = 'The Adult (18+) category needs a signed-in account. Sign in, or send your API key (from /me) as authorization: Bearer bi_…'
 
 export class InputError extends Error {
   constructor(message: string, readonly field?: string) {
@@ -165,6 +168,7 @@ export class BuiltIndie {
   /** Spend Featured days from the balance on a live listing: the same featured_until a paid week extends. */
   async spendFeaturedDays(p: Product, user: User, days: number): Promise<Product> {
     if (p.status !== 'live') throw new InputError('Only a live listing can be featured.')
+    this.notAdult(p)
     if (!this.store.canEdit(p, user)) throw new InputError('You can only feature a listing you submitted or own.')
     const want = Math.floor(Number(days))
     if (!Number.isFinite(want) || want < 1) throw new InputError('Pick at least one day.', 'days')
@@ -196,19 +200,42 @@ export class BuiltIndie {
   }
 
   /** Read the URL and make a draft. A URL already live comes back as `existing` instead. `unlimited` (the admin) skips the hourly cap. */
-  async submit(input: { url: string; makerName?: string; makerProfile?: string }, submitter: string, user: User | null = null, unlimited = false): Promise<{ product: Product; existing: boolean }> {
+  async submit(
+    input: {
+      url: string
+      makerName?: string
+      makerProfile?: string
+      /** The Adult (18+) category: picked by a signed-in submitter or by staff, never guessed. */
+      category?: string | null
+      /** Staff only: what to list when the homepage will not be read (an age gate, a bot wall, robots.txt). */
+      fallback?: { name?: string; tagline?: string; description?: string; tags?: string[] | string }
+    },
+    submitter: string,
+    user: User | null = null,
+    unlimited = false,
+  ): Promise<{ product: Product; existing: boolean }> {
     let url: URL
     try {
       url = normalizeUrl(input.url)
     } catch (e) {
       throw new InputError((e as Error).message, 'url')
     }
+    const category = String(input.category ?? '').trim().toLowerCase() || null
+    if (category && category !== ADULT) throw new InputError(`category is "${ADULT}" or left out: every other category is read from the listing itself`, 'category')
+    if (category === ADULT && !user && !unlimited) throw new InputError(ADULT_NEEDS_ACCOUNT, 'category')
     const already = this.store.byUrl(url.href)
     if (already?.status === 'live') return { product: already, existing: true }
     if (!unlimited && this.store.submissionsFrom(submitter, Date.now() - 3600_000) >= 10) throw new InputError('That is a lot of launches in an hour. Try again later.')
-    const info = await this.read(url.href)
+    let bare = false
+    const info = await this.read(url.href).catch((e) => {
+      const name = unlimited ? clip(input.fallback?.name ?? '', 60) : ''
+      if (!name) throw e
+      bare = true
+      return this.bareInfo(url, { ...input.fallback, name })
+    })
     const id = newId()
-    const pictures = await this.pictures(id, info)
+    // A homepage we could not (or may not) read is not photographed either.
+    const pictures = await this.pictures(id, info, !bare)
     const product = this.store.create(
       {
         id,
@@ -231,11 +258,61 @@ export class BuiltIndie {
         makerProfile: null,
         submitterUser: user?.id ?? null,
         status: user ? 'draft' : 'live',
+        category,
       },
       submitter,
     )
     if (input.makerProfile?.trim()) await this.setMaker(product, input.makerProfile, input.makerName).catch(() => {})
     return { product: this.store.product(id)!, existing: false }
+  }
+
+  /** A listing from what staff typed alone, for a homepage that will not be read: no pictures, no record. */
+  private bareInfo(url: URL, given: { name: string; tagline?: string; description?: string; tags?: string[] | string }): SiteInfo {
+    return {
+      url: url.href,
+      domain: url.hostname,
+      name: given.name,
+      tagline: clip(given.tagline ?? '', 90),
+      description: clip(given.description ?? '', 1200),
+      logo: null,
+      ogImage: null,
+      images: [],
+      videos: [],
+      socials: {},
+      tags: cleanTags(list(given.tags)),
+      themeColor: null,
+      llms: null,
+      manifest: false,
+      profile: null,
+      canonical: url.href,
+      kind: 'product',
+      language: null,
+      feeds: [],
+      cards: {},
+      jsonld: [],
+      declared: false,
+      stack: null,
+      pricing: null,
+      openicon: null,
+      sources: [],
+    }
+  }
+
+  /**
+   * Move a listing into or out of Adult (18+). Its submitter or owner may put it in;
+   * only staff take one out, so a listing never leaves the gate by its owner's say-so.
+   */
+  setCategory(p: Product, category: unknown, staff: boolean): Product {
+    const want = String(category ?? '').trim().toLowerCase() || null
+    if (want && want !== ADULT) throw new InputError(`category is "${ADULT}" or null: every other category is read from the listing itself`, 'category')
+    if (want === p.category) return p
+    if (!want && !staff) throw new InputError('Only built.indie staff can move a listing out of the Adult (18+) category.', 'category')
+    return this.store.update(p.id, { category: want })!
+  }
+
+  /** The Featured row is on the public homepage, so an adult listing cannot take a slot (or be charged for one). */
+  private notAdult(p: Product): void {
+    if (p.category === ADULT) throw new InputError('Adult (18+) listings cannot be featured: the Featured row is on the public homepage.')
   }
 
   /** The TXT value this person puts in DNS to claim this product. Stable, so a record added yesterday still counts. */
@@ -339,12 +416,12 @@ export class BuiltIndie {
   }
 
   /** Logo, card image, up to four screenshots from the page, and our own screenshot of the homepage. */
-  private async pictures(id: string, info: SiteInfo) {
+  private async pictures(id: string, info: SiteInfo, shoot = true) {
     const o = this.config.fetch ?? {}
     const [logo, og, shot, ...found] = await Promise.all([
       this.media.save(id, 'logo', info.logo, o),
       this.media.save(id, 'card', info.ogImage, o),
-      this.config.screenshots === false ? null : screenshot(info.url).then((png) => (png ? this.media.write(id, 'home.png', png, { width: 1280, height: 800 }) : null)),
+      this.config.screenshots === false || !shoot ? null : screenshot(info.url).then((png) => (png ? this.media.write(id, 'home.png', png, { width: 1280, height: 800 }) : null)),
       ...info.images.slice(0, 6).map((src, i) => this.media.save(id, `shot-${i + 1}`, src, { ...o, minSide: 200 })),
     ])
     return {
@@ -447,6 +524,7 @@ export class BuiltIndie {
   /** Spend one invite credit on a live listing: featured for the usual number of days, free. */
   redeemCredit(p: Product, user: User): Product {
     if (p.status !== 'live') throw new InputError('Only a live listing can be featured.')
+    this.notAdult(p)
     if (!this.store.redeemCredit(user.id, p.id, this.config.featureDays)) throw new InputError('No invite credits left. Invite a maker who launches to earn one.')
     this.featured(p.id, this.config.featureDays, 'invite_credit')
     return this.store.product(p.id)!
@@ -603,6 +681,7 @@ export class BuiltIndie {
     const cp = this.config.coinpay
     if (!cp) throw new InputError('Featuring is not set up on this server yet.')
     if (p.status !== 'live') throw new InputError('Publish it first.')
+    this.notAdult(p)
     const email = validEmail(buyer.email)
     if (!email) throw new InputError('Enter your email: CoinPay sends the receipt there', 'email')
     const accountId = String(buyer.accountId ?? '').trim() || email

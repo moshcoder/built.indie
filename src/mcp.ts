@@ -34,15 +34,16 @@ export function createMcpServer(client = new BuiltIndieClient()): McpServer {
       maker_profile: z.string().optional().describe("The maker's OpenProfile.md URL (logicsrc.com/openprofile)"),
       tagline: z.string().max(90).optional().describe('Override the tagline we find'),
       publish: z.boolean().optional().describe('Go live now (default true); false leaves a draft to check'),
+      category: z.enum(['adult']).optional().describe('Only for a legal adult site: lists it in Adult (18+), which signed-in members alone can see. Needs BUILTINDIE_KEY. Every other category is read from the listing.'),
     },
-    wrap((a: { url: string; maker_name?: string; maker_profile?: string; tagline?: string; publish?: boolean }) => client.launch(a.url, { makerName: a.maker_name, makerProfile: a.maker_profile, tagline: a.tagline, publish: a.publish })),
+    wrap((a: { url: string; maker_name?: string; maker_profile?: string; tagline?: string; publish?: boolean; category?: string }) => client.launch(a.url, { makerName: a.maker_name, makerProfile: a.maker_profile, tagline: a.tagline, publish: a.publish, category: a.category })),
   )
   server.tool('preview_site', 'Read any site the way built.indie does (name, tagline, description, logo, screenshots, videos, socials, llms.txt, OpenProfile) without saving anything.', { url: z.string().min(3) }, wrap((a: { url: string }) => client.preview(a.url)))
   server.tool(
     'list_products',
     'Products launched on built.indie, best first: today, week, month, all, new (newest first) or featured.',
-    { window: z.enum(['today', 'week', 'month', 'all', 'new', 'featured']).default('today'), limit: z.number().int().min(1).max(100).default(20) },
-    wrap((a: { window: string; limit: number }) => client.list(a.window, a.limit)),
+    { window: z.enum(['today', 'week', 'month', 'all', 'new', 'featured']).default('today'), limit: z.number().int().min(1).max(100).default(20), category: z.enum(['adult']).optional().describe('adult: the Adult (18+) category instead (needs BUILTINDIE_KEY); it is never in the other lists') },
+    wrap((a: { window: string; limit: number; category?: string }) => client.list(a.window, a.limit, a.category)),
   )
   server.tool('get_product', 'Everything about one launch: description, pictures, videos, socials, maker, votes, award.', { slug }, wrap((a: { slug: string }) => client.product(a.slug)))
   server.tool('list_tags', 'Every tag on built.indie with how many launches carry it, most used first.', {}, wrap(() => client.tags()))
@@ -57,7 +58,7 @@ export function createMcpServer(client = new BuiltIndieClient()): McpServer {
     'Search and filter launches. Words match name, tags, category, domain, tagline, maker, stack and description. Narrow with categories (see list_categories), tags, has (verified, claimed, featured, video, screenshots, llms, opensite, openprofile, openstack, opensaas, maker), stack, maker and launched. The answer carries facets: counts for each value, to narrow further.',
     {
       query: z.string().max(80).default(''),
-      category: z.array(z.string()).max(10).optional().describe('Category keys, e.g. developer-tools, ai, crypto, security (any of them)'),
+      category: z.array(z.string()).max(10).optional().describe('Category keys, e.g. developer-tools, ai, crypto, security (any of them). adult searches the Adult (18+) category alone and needs BUILTINDIE_KEY; adult listings are in no other search'),
       tag: z.array(z.string()).max(10).optional().describe('Tags (any of them)'),
       has: z.array(z.string()).max(10).optional().describe('Every one must hold: verified, claimed, featured, video, screenshots, llms, opensite, openprofile, openstack, opensaas, maker'),
       stack: z.array(z.string()).max(10).optional().describe('Built with (from the product\'s OpenStack.md)'),

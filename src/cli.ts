@@ -37,7 +37,8 @@ export const HELP = `builtindie ${VERSION}: launch your indie product with one U
   builtindie                          interactive (TUI)
   builtindie launch <url>             launch it, free; we fetch logo, screenshots, videos, llms.txt
         [--maker "Name"] [--profile <openprofile.md url>] [--tagline "…"] [--draft]
-  builtindie top [today|week|month|all|new|featured]
+        [--category adult]            an adult site: listed in Adult (18+), members only (needs a key)
+  builtindie top [today|week|month|all|new|featured] [--category adult]
   builtindie show <slug>
   builtindie vote <slug>
   builtindie preview <url>            what we read from a site; nothing is saved
@@ -157,7 +158,7 @@ export async function main(argv = process.argv.slice(2), out: Out = console, cli
       case 'launch':
       case 'submit': {
         if (!rest[0]) throw new Error('builtindie launch <url>')
-        const r = await client.launch(rest[0], { makerName: str('maker'), makerProfile: str('profile'), name: str('name'), tagline: str('tagline'), description: str('description'), tags: str('tags')?.split(','), videos: str('video') ? [str('video')!] : undefined, publish: !flags.draft })
+        const r = await client.launch(rest[0], { makerName: str('maker'), makerProfile: str('profile'), name: str('name'), tagline: str('tagline'), description: str('description'), tags: str('tags')?.split(','), videos: str('video') ? [str('video')!] : undefined, publish: !flags.draft, category: str('category') })
         if (r.existing) return show(r, `Already launched:\n${line(r.product)}`), 0
         show(r, `${describe(r.product)}\n\n${r.product.status === 'live' ? 'Live. Share it and add the badge.' : `Draft: builtindie publish ${r.product.slug}`}\nYours? builtindie claim ${r.product.slug}  (${r.claim_url})`)
         return 0
@@ -166,7 +167,7 @@ export async function main(argv = process.argv.slice(2), out: Out = console, cli
       case 'list':
       case 'new': {
         const w = command === 'new' ? 'new' : (rest[0] ?? 'today')
-        const r = await client.list(w, Number(str('limit') ?? 30))
+        const r = await client.list(w, Number(str('limit') ?? 30), str('category'))
         show(r, r.products.map((p, i) => line(p, w === 'new' ? undefined : i + 1)).join('\n') || `Nothing launched ${w === 'today' ? 'today yet' : 'here yet'}.`)
         return 0
       }

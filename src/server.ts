@@ -14,7 +14,7 @@ import { leaderboard } from '@profullstack/leaderboard/hono'
 import { Auth, consoleMailer, resendMailer, safeNext, SESSION_COOKIE, validEmail, type Mailer } from './auth.js'
 import { Store, type Comment, type Product, type Review, type User, type Window } from './db.js'
 import { privateAddress } from './fetch.js'
-import { CATEGORY_LABELS, parseQuery, queryString, search } from './browse.js'
+import { ADULT, ADULT_LABEL, CATEGORY_LABELS, isAdult, parseQuery, queryString, search, wantsAdult, type Result } from './browse.js'
 import { badgeSvg, launchBadgeSvg, boardPage, browsePage, cardImage, claimBadgeSnippet, claimMarkdown, claimPage, editPage, esc, helpPage, homePage, inviteLanding, invitePage, leaderboardPage, loginPage, makerPage, mePage, messagePage, productPage, submitPage, tagsPage, type CommentView, type Ctx, type InviterRow, type ReviewView } from './html.js'
 import { normalizeTag } from './tags.js'
 import { siteLeaderboard } from './leaderboard.js'
@@ -22,7 +22,7 @@ import { HOW_TO_EARN, SHARE_NETWORKS } from './karma.js'
 import { IMAGE_TYPES, Media } from './media.js'
 import { startPitFooterRefresh } from './pit-footer.js'
 import { RING_PLACEHOLDER, ringBar, startRingRefresh, visitorOnMoshpit } from './ring.js'
-import { BuiltIndie, CLAIM_LABEL, CLAIM_PREFIX, INVITE_BONUS_DAYS, INVITES_PER_PERSON, InputError, type Config, type Edit } from './service.js'
+import { ADULT_NEEDS_ACCOUNT, BuiltIndie, CLAIM_LABEL, CLAIM_PREFIX, INVITE_BONUS_DAYS, INVITES_PER_PERSON, InputError, type Config, type Edit } from './service.js'
 import { autofetch, FetchError } from './fetch.js'
 import { COINPAY_ERRORS, coinpayOAuthFromEnv, isPlaceholder, mountCoinPaySignin, PROVIDER as COINPAY, type CoinPayOAuth } from './coinpay-signin.js'
 import { VERSION } from './version.js'
@@ -66,6 +66,10 @@ export type Deps = { service: BuiltIndie; auth: Auth; adminKey?: string; secureC
 const REF_COOKIE = 'bi_ref'
 /** A scarce single-use invite code (INV-XXXX-XXXX-XXXX) from /i/<code>, kept until the visitor signs up. */
 const INVITE_COOKIE = 'bi_invite'
+/** Set once a member has seen the one-line 18+ notice, for the rest of the browser session. */
+const ADULT_SEEN_COOKIE = 'bi_adult'
+/** Every Adult (18+) page and answer, signed in or not. */
+const NOINDEX = 'noindex, nofollow'
 /** An @profullstack/affiliates invite code, as opposed to a member's open invite-link code. */
 const isInviteCode = (code: string | null | undefined): code is string => Boolean(code && /^INV-?[0-9A-Z]{4}-?[0-9A-Z]{4}-?[0-9A-Z]{4}$/i.test(code.trim()))
 type Env = { Bindings: { ip?: string } }
@@ -129,6 +133,34 @@ export function createApp(deps: Deps) {
   }
   const secure = (c: Context) => deps.secureCookies ?? (c.req.header('x-forwarded-proto') ?? 'https') === 'https'
 
+  // The Adult (18+) category: signed-in members only. A member is a session, an account API key, or staff.
+  const member = (c: Context) => Boolean(sessionUser(c) || store.byApiKey(bearer(c)) || isAdmin(c))
+  const ADULT_401 = { error: ADULT_NEEDS_ACCOUNT, login: `${origin}/login` }
+  /** Sign in, then come back to exactly this address. */
+  const toLoginHere = (c: Context) => {
+    const u = new URL(c.req.url)
+    c.header('x-robots-tag', NOINDEX)
+    return c.redirect(`/login?next=${encodeURIComponent(u.pathname + u.search)}`)
+  }
+  /** What an anonymous visitor gets for anything adult: 401 where a machine asked, the sign-in page otherwise. Never a 404. */
+  const adultRefusal = (c: Context) => {
+    const path = c.req.path
+    if (path.startsWith('/api/') || path.endsWith('.json') || wantsJson(c)) return c.json(ADULT_401, 401, { 'x-robots-tag': NOINDEX, 'cache-control': 'private, no-store' })
+    if (path.endsWith('.md')) return c.text(ADULT_NEEDS_ACCOUNT, 401, { 'x-robots-tag': NOINDEX, 'cache-control': 'private, no-store' })
+    return toLoginHere(c)
+  }
+  /** Everything under one listing's address, pages and API alike: an adult listing answers members only, and is never indexed. */
+  const adultListingGate = async (c: Context, next: () => Promise<void>) => {
+    const p = store.bySlug(c.req.param('slug') ?? '')
+    if (!p || !isAdult(p) || p.status === 'hidden') return next()
+    if (!member(c)) return adultRefusal(c)
+    await next()
+    c.res.headers.set('x-robots-tag', NOINDEX)
+    c.res.headers.set('cache-control', 'private, no-store')
+  }
+  /** A maker whose only live listings are adult: their page is an adult page. */
+  const adultOnlyMaker = (id: string) => store.byMaker(id).length === 0 && store.byMaker(id, true).length > 0
+
   // The leaderboards (@profullstack/leaderboard over the karma ledger and the invites table).
   const board = siteLeaderboard(store, origin)
   const rowsOf = async (id: 'karma' | 'invites', period: 'week' | 'month' | 'all', limit: number): Promise<InviterRow[]> => (await board.top({ board: id, period, limit })).rows.map((r) => ({ ...r, url: `/leaderboard/u/${encodeURIComponent(r.id)}` }))
@@ -164,6 +196,13 @@ export function createApp(deps: Deps) {
     const u = store.user(submitterId)
     if (!u) return
     const page = `${origin}/p/${p.slug}`
+    // An adult listing is on no board and in no feed: the mail says where it is instead of asking for shares.
+    if (isAdult(p)) {
+      const where = `${origin}/c/${ADULT}`
+      const words = `${p.name} is live on built.indie in the ${ADULT_LABEL} category: ${page}\n\nSigned-in members find it at ${where}. It is not on the public boards, search or feeds, and it cannot be Featured. The badge works as usual: ${page}/claim`
+      void sendWithPromo(u.email, `${p.name} is live on built.indie`, words, `<p><b>${esc(p.name)}</b> is live on built.indie in the ${esc(ADULT_LABEL)} category: <a href="${page}">${page}</a></p><p>Signed-in members find it at <a href="${where}">${where}</a>. It is not on the public boards, search or feeds, and it cannot be Featured. The badge works as usual: <a href="${page}/claim">${page}/claim</a></p>`, 'launch')
+      return
+    }
     const text = `${p.name} is live on built.indie: ${page}\n\nShare it to climb today's board (one vote per visitor, the board resets at 00:00 UTC). Add the badge to your site for a dofollow link: ${page}/claim\n\nInvite another maker and you both get free Featured days: ${inviteLink(u)}`
     const html = `<p><b>${esc(p.name)}</b> is live on built.indie: <a href="${page}">${page}</a></p><p>Share it to climb today's board (one vote per visitor, the board resets at 00:00 UTC). Add the badge to your site for a dofollow link: <a href="${page}/claim">${page}/claim</a></p><p><a href="${page}" style="display:inline-block;padding:10px 18px;background:#ff5c39;color:#fff;border-radius:8px;text-decoration:none;font-weight:700">See your listing</a></p><p>Invite another maker and you both get free Featured days: <a href="${inviteLink(u)}">${inviteLink(u)}</a></p>`
     void sendWithPromo(u.email, `${p.name} is live on built.indie`, text, html, 'launch')
@@ -176,6 +215,12 @@ export function createApp(deps: Deps) {
     const inviter = store.user(inviterId)
     if (!inviter) return
     const credits = store.inviteStats(inviterId).credits
+    // The inviter is told they earned a credit, not which adult listing earned it.
+    if (isAdult(p)) {
+      const words = `A maker you invited just launched on built.indie.\n\nThat earned you a free Featured week. You have ${credits} to use: ${origin}/invite\n\nKeep going: every maker you invite who launches earns another.`
+      void sendWithPromo(inviter.email, `You earned a free Featured week on built.indie`, words, `<p>${esc(words).replace(/\n/g, '<br>')}</p>`, 'invite')
+      return
+    }
     const text = `${p.name} just launched on built.indie through your invite: ${origin}/p/${p.slug}\n\nThat earned you a free Featured week. You have ${credits} to use: ${origin}/invite\n\nKeep going: every maker you invite who launches earns another.`
     const html = `<p><b>${esc(p.name)}</b> just launched on built.indie through your invite: <a href="${origin}/p/${esc(p.slug)}">${origin}/p/${esc(p.slug)}</a></p><p>That earned you a free Featured week. You have <b>${credits}</b> to use.</p><p><a href="${origin}/invite" style="display:inline-block;padding:10px 18px;background:#ff5c39;color:#fff;border-radius:8px;text-decoration:none;font-weight:700">Use it</a></p>`
     void sendWithPromo(inviter.email, `You earned a free Featured week on built.indie`, text, html, 'invite')
@@ -195,6 +240,11 @@ export function createApp(deps: Deps) {
   })
 
   app.get('/health', (c) => c.json({ ok: true, version: VERSION }))
+
+  app.use('/p/:slug', adultListingGate)
+  app.use('/p/:slug/*', adultListingGate)
+  app.use('/api/v1/products/:slug', adultListingGate)
+  app.use('/api/v1/products/:slug/*', adultListingGate)
 
   // Static files.
   const TYPES: Record<string, string> = { css: 'text/css; charset=utf-8', js: 'text/javascript; charset=utf-8', svg: 'image/svg+xml', png: 'image/png', crt: 'application/x-x509-ca-cert', webmanifest: 'application/manifest+json' }
@@ -228,15 +278,37 @@ export function createApp(deps: Deps) {
   })
   app.get('/new', (c) => page(c, boardPage(ctxOf(c), 'new', store.list('new', 50))))
   // Browse and search, with facets (browse.ts). /c/ and /t/ are one filter each, at an indexable address.
+  /**
+   * One query over the right listings. Asking for Adult (18+) searches adult listings and
+   * nothing else; every other query never sees one, whoever asks. Callers check `member` first.
+   */
+  const run = (params: URLSearchParams | Record<string, string | string[] | undefined>, o: { limit?: number } = {}): Result => {
+    const q = parseQuery(params)
+    return wantsAdult(q) ? search(store.adultLive(), { ...q, category: [ADULT] }, o) : search(store.allLive(), q, o)
+  }
+  /** Members see an Adult (18+) entry wherever categories are listed; nobody else does. */
+  const withAdultEntry = (c: Context, r: Result): Result =>
+    !member(c) || r.facets.category.some((f) => f.value === ADULT) ? r : { ...r, facets: { ...r.facets, category: [...r.facets.category, { value: ADULT, label: ADULT_LABEL, count: store.adultCount() }] } }
   const browse = (c: Context, extra: Record<string, string> = {}) => {
     const params = new URL(c.req.url).searchParams
     for (const [k, v] of Object.entries(extra)) if (!params.getAll(k).includes(v)) params.append(k, v)
-    return search(store.allLive(), parseQuery(params))
+    return withAdultEntry(c, run(params))
   }
-  app.get('/search', (c) => page(c, browsePage(ctxOf(c), browse(c))))
+  /** The adult category as a page: members only, never indexed, with the 18+ line the first time in a session. */
+  const adultBrowse = (c: Context<Env>, path: string) => {
+    if (!sessionUser(c)) return toLoginHere(c)
+    const first = !getCookie(c, ADULT_SEEN_COOKIE)
+    if (first) setCookie(c, ADULT_SEEN_COOKIE, '1', { httpOnly: true, secure: secure(c), sameSite: 'Lax', path: '/' })
+    c.header('x-robots-tag', NOINDEX)
+    c.header('cache-control', 'private, no-store')
+    const r = browse(c, { category: ADULT })
+    return page(c, browsePage(ctxOf(c), r, { path, heading: path === '/search' ? undefined : ADULT_LABEL, intro: `${ADULT_LABEL}: legal adult sites for adults, shown to signed-in members only`, adult: true, notice: first ? 'Adult content. You must be 18 or older.' : undefined }))
+  }
+  app.get('/search', (c) => (wantsAdult(parseQuery(new URL(c.req.url).searchParams)) ? adultBrowse(c, '/search') : page(c, browsePage(ctxOf(c), browse(c)))))
   app.get('/c/:category', (c) => {
     const key = c.req.param('category')
     if (!(key in CATEGORY_LABELS)) return c.notFound()
+    if (key === ADULT) return new URL(c.req.url).search ? c.redirect(`/search?category=${ADULT}&${new URL(c.req.url).searchParams}`) : adultBrowse(c, `/c/${ADULT}`)
     const label = CATEGORY_LABELS[key]!
     // Further filters go to /search, so /c/<category> stays one page.
     if (new URL(c.req.url).search) return c.redirect(`/search?category=${encodeURIComponent(key)}&${new URL(c.req.url).searchParams}`)
@@ -261,11 +333,13 @@ export function createApp(deps: Deps) {
     if (!readLimit.allow(`read:${ip(c)}`)) return page(c, submitPage(ctxOf(c), { values: form, error: { message: 'Too many launches from you. Wait a few minutes.' } }), 429)
     try {
       const user = sessionUser(c)
-      const r = await service.submit({ url: form.url ?? '', makerName: form.makerName, makerProfile: form.makerProfile }, store.voterFor(ip(c)), user)
+      const r = await service.submit({ url: form.url ?? '', makerName: form.makerName, makerProfile: form.makerProfile, category: form.category }, store.voterFor(ip(c)), user)
       if (r.existing) return c.redirect(`/p/${r.product.slug}?existing=1`)
       return c.redirect(user ? `/p/${r.product.slug}/edit?fresh=1` : `/p/${r.product.slug}?launched=1`)
     } catch (e) {
       if (!(e instanceof InputError)) console.error('submit', e)
+      // Picking Adult (18+) without an account: told to sign in, in the form's own words.
+      if (e instanceof InputError && e.field === 'category' && !sessionUser(c)) return page(c, submitPage(ctxOf(c), { values: form, error: { message: 'Sign in to submit to the Adult (18+) category.', field: 'category' } }), 401)
       return page(c, submitPage(ctxOf(c), { values: form, error: { message: e instanceof Error ? e.message : String(e), ...(e instanceof InputError && e.field ? { field: e.field } : {}) } }), e instanceof InputError ? 400 : 502)
     }
   })
@@ -762,6 +836,8 @@ export function createApp(deps: Deps) {
   app.get('/for.svg', (c) => badgeImage(c, store.bySite(c.req.query('site') ?? ''), true))
   app.get('/for', (c) => {
     const p = store.bySite(c.req.query('site') ?? '')
+    // An adult listing's badge leads a visitor with no account to sign in first, then on to the listing.
+    if (p && isAdult(p) && !sessionUser(c)) return c.redirect(`/login?next=${encodeURIComponent(`/p/${p.slug}`)}`)
     return c.redirect(p ? `/p/${p.slug}?ref=badge` : '/submit?ref=badge')
   })
   app.get('/images.svg', (c) => {
@@ -772,9 +848,16 @@ export function createApp(deps: Deps) {
 
   app.get('/makers/:id', (c) => {
     const m = store.maker(c.req.param('id'))
-    return m ? page(c, makerPage(ctxOf(c), { maker: m, products: store.byMaker(m.id) })) : page(c, messagePage(ctxOf(c), { title: 'Not here', message: 'No such maker.' }), 404)
+    if (!m) return page(c, messagePage(ctxOf(c), { title: 'Not here', message: 'No such maker.' }), 404)
+    // Adult listings stay in their category: a maker's page lists the public ones. A maker with only adult ones is an adult page.
+    if (!adultOnlyMaker(m.id)) return page(c, makerPage(ctxOf(c), { maker: m, products: store.byMaker(m.id) }))
+    if (!sessionUser(c)) return toLoginHere(c)
+    c.header('x-robots-tag', NOINDEX)
+    c.header('cache-control', 'private, no-store')
+    return page(c, makerPage(ctxOf(c), { maker: m, products: store.byMaker(m.id, true), adult: true }))
   })
   app.get('/makers/:id/openprofile.md', (c) => {
+    if (adultOnlyMaker(c.req.param('id')) && !member(c)) return adultRefusal(c)
     const md = service.makerProfile(c.req.param('id'))
     return md ? c.body(md, 200, { 'content-type': 'text/markdown; charset=utf-8', 'access-control-allow-origin': '*' }) : c.text('not found', 404)
   })
@@ -820,6 +903,8 @@ export function createApp(deps: Deps) {
     url: p.url,
     domain: p.domain,
     status: p.status,
+    // 'adult' or null. Null in every public answer: adult listings only come back to a member who asked for them.
+    category: p.category,
     votes: p.votes,
     reviews: p.reviews,
     rating: p.rating,
@@ -871,13 +956,20 @@ export function createApp(deps: Deps) {
     const b = await body(c)
     try {
       const user = apiUser(c)
-      const r = await service.submit({ url: String(b.url ?? ''), makerName: b.maker_name, makerProfile: b.maker_profile }, store.voterFor(ip(c)), user, admin)
-      if (r.existing) return c.json({ existing: true, product: apiProduct(r.product) }, 200)
+      const r = await service.submit({ url: String(b.url ?? ''), makerName: b.maker_name, makerProfile: b.maker_profile, category: b.category, fallback: { name: b.name, tagline: b.tagline, description: b.description, tags: b.tags } }, store.voterFor(ip(c)), user, admin)
+      if (r.existing) {
+        // Staff re-posting a live listing with a category move it; nobody else changes an existing listing here.
+        const now = admin && b.category !== undefined ? service.setCategory(r.product, b.category, true) : r.product
+        if (isAdult(now) && !member(c)) return c.json(ADULT_401, 401)
+        return c.json({ existing: true, product: apiProduct(now) }, 200)
+      }
       let p = r.product
-      if (user && (b.name || b.tagline || b.description || b.tags || b.videos)) p = await service.edit(p, { name: b.name, tagline: b.tagline, description: b.description, tags: b.tags, videos: b.videos })
+      // The submitter's own words, or staff's (a bulk import names each listing), win over what we read.
+      if ((user || admin) && (b.name || b.tagline || b.description || b.tags || b.videos)) p = await service.edit(p, { name: b.name, tagline: b.tagline, description: b.description, tags: b.tags, videos: b.videos })
       if (user && b.publish !== false && p.status === 'draft') p = service.publish(p)
       return c.json({ product: apiProduct(p), claim_url: `${origin}/p/${p.slug}/claim` }, 201)
     } catch (e) {
+      if (e instanceof InputError && e.field === 'category' && e.message === ADULT_NEEDS_ACCOUNT) return c.json({ ...ADULT_401, field: 'category' }, 401)
       return apiError(c, e)
     }
   })
@@ -890,6 +982,13 @@ export function createApp(deps: Deps) {
     if (!q && !tag && !WINDOWS.includes(w)) return c.json({ error: `window is one of ${WINDOWS.join(', ')}` }, 400)
     const limit = Math.min(100, Math.max(1, Number(c.req.query('limit') ?? 30) || 30))
     const offset = Math.max(0, Number(c.req.query('offset') ?? 0) || 0)
+    // Adult (18+) listings: only on an explicit category=adult, only to a member. Without it a member gets what anyone gets.
+    if (c.req.query('category') !== undefined) {
+      if (c.req.query('category') !== ADULT) return c.json({ error: `category is "${ADULT}" here; filter the other categories with /api/v1/search?category=…` }, 400)
+      if (!member(c)) return adultRefusal(c)
+      const all = run({ category: ADULT, ...(q ? { q } : {}), ...(tag ? { tag } : {}), sort: w === 'new' ? 'new' : 'top' }, { limit: 5000 }).products
+      return c.json({ window: q ? 'search' : tag ? 'tag' : WINDOWS.includes(w) ? w : 'all', category: ADULT, products: all.slice(offset, offset + limit).map(apiProduct) }, 200, { 'x-robots-tag': NOINDEX, 'cache-control': 'private, no-store' })
+    }
     const products = tag ? store.byTag(tag, limit) : q ? search(store.allLive(), parseQuery({ q }), { limit }).products : store.list(w, limit, offset)
     return c.json({ window: tag ? 'tag' : q ? 'search' : w, ...(tag ? { tag } : {}), products: products.map(apiProduct) }, 200, { 'access-control-allow-origin': '*' })
   })
@@ -898,7 +997,9 @@ export function createApp(deps: Deps) {
   app.get('/api/v1/search', (c) => {
     const params = new URL(c.req.url).searchParams
     const limit = Math.min(100, Math.max(1, Number(params.get('limit') ?? 30) || 30))
-    const r = search(store.allLive(), parseQuery(params), { limit })
+    const adult = wantsAdult(parseQuery(params))
+    if (adult && !member(c)) return adultRefusal(c)
+    const r = adult ? run(params, { limit }) : withAdultEntry(c, run(params, { limit }))
     const qs = queryString(r.query)
     return c.json(
       {
@@ -911,12 +1012,13 @@ export function createApp(deps: Deps) {
         web: `${origin}/search${qs ? `?${qs}` : ''}`,
       },
       200,
-      { 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=30' },
+      // A member's answer names the Adult (18+) entry (or is the adult category): it is theirs alone, never a shared cache's.
+      member(c) ? { 'cache-control': 'private, no-store', ...(adult ? { 'x-robots-tag': NOINDEX } : {}) } : { 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=30' },
     )
   })
   app.get('/api/v1/categories', (c) => {
-    const r = search(store.allLive(), parseQuery({}), { limit: 0 })
-    return c.json({ categories: r.facets.category.map((f) => ({ key: f.value, label: f.label, count: f.count, page: `${origin}/c/${f.value}` })), tags: r.facets.tag.map((f) => ({ tag: f.value, count: f.count, page: `${origin}/t/${encodeURIComponent(f.value)}` })) }, 200, { 'access-control-allow-origin': '*' })
+    const r = withAdultEntry(c, search(store.allLive(), parseQuery({}), { limit: 0 }))
+    return c.json({ categories: r.facets.category.map((f) => ({ key: f.value, label: f.label, count: f.count, page: `${origin}/c/${f.value}` })), tags: r.facets.tag.map((f) => ({ tag: f.value, count: f.count, page: `${origin}/t/${encodeURIComponent(f.value)}` })) }, 200, member(c) ? { 'cache-control': 'private, no-store' } : { 'access-control-allow-origin': '*' })
   })
 
   app.get('/api/v1/tags', (c) => c.json({ tags: store.tagCounts() }, 200, { 'access-control-allow-origin': '*' }))
@@ -929,10 +1031,13 @@ export function createApp(deps: Deps) {
   })
 
   app.patch('/api/v1/products/:slug', async (c) => {
-    const p = owned(c)
-    if (!p) return c.json(NEEDS_KEY, 401)
+    // Its owner edits; staff (the admin key) may too, and are the only ones who move a listing out of Adult (18+).
+    const admin = isAdmin(c)
+    const found = admin ? store.bySlug(c.req.param('slug')) : owned(c)
+    if (!found || (admin && found.status === 'hidden')) return admin ? c.json({ error: 'no such product' }, 404) : c.json(NEEDS_KEY, 401)
     const b = await body(c)
     try {
+      const p = b.category !== undefined ? service.setCategory(found, b.category, admin) : found
       return c.json(apiProduct(await service.edit(p, { name: b.name, tagline: b.tagline, description: b.description, tags: b.tags, videos: b.videos, makerName: b.maker_name, makerProfile: b.maker_profile, socials: b.socials, remove: b.remove })))
     } catch (e) {
       return apiError(c, e)
@@ -1178,6 +1283,7 @@ export function createApp(deps: Deps) {
 
   app.get('/api/v1/makers/:id', (c) => {
     const m = store.maker(c.req.param('id'))
+    if (m && adultOnlyMaker(m.id)) return member(c) ? c.json({ ...m, page: `${origin}/makers/${m.id}`, products: store.byMaker(m.id, true).map(apiProduct) }, 200, { 'x-robots-tag': NOINDEX, 'cache-control': 'private, no-store' }) : adultRefusal(c)
     return m ? c.json({ ...m, page: `${origin}/makers/${m.id}`, products: store.byMaker(m.id).map(apiProduct) }) : c.json({ error: 'no such maker' }, 404)
   })
 
@@ -1188,6 +1294,7 @@ export function createApp(deps: Deps) {
     try {
       p = url ? store.byUrl(url.startsWith('http') ? url : `https://${url}`) : null
     } catch {}
+    if (p && isAdult(p) && p.status === 'live' && !member(c)) return adultRefusal(c)
     return p?.record && p.status === 'live' ? c.json(p.record, 200, { 'access-control-allow-origin': '*' }) : c.json({ error: 'no record for that URL; POST /api/v1/sites to read it' }, 404)
   })
   app.post('/api/v1/sites', async (c) => {

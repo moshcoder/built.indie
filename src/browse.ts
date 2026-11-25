@@ -9,7 +9,7 @@
  * Facets work the usual way: values within a facet are OR'd, facets are AND'd,
  * and each facet counts what you would get by changing only that facet.
  */
-import type { Product } from './db.js'
+import { ADULT, type Product } from './db.js'
 
 export type Category = { key: string; label: string; words: string[] }
 
@@ -37,7 +37,16 @@ export const CATEGORIES: Category[] = [
   { key: 'hosting', label: 'Hosting & infrastructure', words: ['hosting', 'server', 'servers', 'vps', 'dns', 'domains', 'domain names', 'cloud', 'seedbox', 'bare metal', 'cdn', 'deploy', 'deployment', 'infrastructure'] },
 ]
 const OTHER: Category = { key: 'other', label: 'Other', words: [] }
-export const CATEGORY_LABELS: Record<string, string> = Object.fromEntries([...CATEGORIES, OTHER].map((c) => [c.key, c.label]))
+/**
+ * Adult (18+) is the one category that is never read from a listing's words: the
+ * submitter picks it or staff set it (products.category), and nothing here can
+ * put a listing in it or take one out. It has no words on purpose. Adult listings
+ * are shown to signed-in members only, and only inside this category.
+ */
+export { ADULT }
+export const ADULT_LABEL = 'Adult (18+)'
+export const isAdult = (p: { category?: string | null }) => p.category === ADULT
+export const CATEGORY_LABELS: Record<string, string> = { ...Object.fromEntries([...CATEGORIES, OTHER].map((c) => [c.key, c.label])), [ADULT]: ADULT_LABEL }
 
 const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
 const MATCHERS = CATEGORIES.map((c) => ({ key: c.key, re: new RegExp(`(?:^|[^a-z0-9])(?:${c.words.map(escRe).join('|')})(?=$|[^a-z0-9])`, 'g') }))
@@ -47,7 +56,9 @@ const MATCHERS = CATEGORIES.map((c) => ({ key: c.key, re: new RegExp(`(?:^|[^a-z
  * what it is; the description only breaks ties, so a passing mention of
  * "payments" in a long paragraph does not file a music site under finance.
  */
-export function categorize(p: Pick<Product, 'tags' | 'name' | 'tagline' | 'description'>): string[] {
+export function categorize(p: Pick<Product, 'tags' | 'name' | 'tagline' | 'description'> & { category?: string | null }): string[] {
+  // An adult listing is in Adult (18+) and nowhere else; no other listing can land there.
+  if (isAdult(p)) return [ADULT]
   const strong = ` ${[...p.tags, p.name, p.tagline].join(' · ').toLowerCase()} `
   const weak = ` ${p.description.toLowerCase()} `
   const scored = MATCHERS.map((m) => ({ key: m.key, score: 3 * (strong.match(m.re)?.length ?? 0) + Math.min(2, weak.match(m.re)?.length ?? 0) }))
@@ -142,6 +153,9 @@ export function toggle(q: Query, facet: FacetName, value: string): Query {
   else next[facet] = q[facet].includes(value) ? q[facet].filter((v) => v !== value) : [...q[facet], value]
   return next
 }
+
+/** A query that asks for the Adult (18+) category: it is answered from adult listings only, for signed-in members only. */
+export const wantsAdult = (q: Query) => q.category.includes(ADULT)
 
 export const isEmpty = (q: Query) => !q.q && !q.launched && !q.category.length && !q.tag.length && !q.stack.length && !q.has.length && !q.maker.length
 

@@ -46,6 +46,8 @@ export type Product = {
   claimedAt: number | null
   submitterUser: string | null
   status: Status
+  /** An explicit category, set by the submitter or staff, never inferred. Only 'adult' exists: such a listing is shown to signed-in members only. */
+  category: string | null
   votes: number
   /** Reviews: how many, and the mean of their 1-5 stars (null with none). */
   reviews: number
@@ -78,6 +80,11 @@ export type Window = 'today' | 'week' | 'month' | 'all' | 'new' | 'featured'
 export const hashKey = (key: string) => createHash('sha256').update(key).digest('hex')
 export const newId = (bytes = 9) => randomBytes(bytes).toString('base64url')
 export const makerIdFor = (profileUrl: string) => createHash('sha256').update(profileUrl.toLowerCase()).digest('base64url').slice(0, 10)
+
+/** The one explicit category. A listing is adult when its category is this, and nothing else makes it so. */
+export const ADULT = 'adult'
+/** A live listing anyone may see: every public list, count, feed and search reads through this. */
+const PUBLIC = "status = 'live' AND category IS NOT 'adult'"
 
 /** Paths that are pages, never product slugs. */
 const RESERVED = new Set(['submit', 'new', 'top', 'api', 'm', 'p', 'b', 'makers', 'help', 'about', 'feed', 'badge', 'hooks', 'health', 'ring', 'well-known', 'admin', 'today', 'week', 'month', 'all', 'featured', 'edit', 'i', 'invite', 'leaderboard', 't', 'tags'])
@@ -263,6 +270,8 @@ export class Store {
     for (const col of ['checkout_session_id', 'customer_email', 'account_id', 'payment_id']) if (!has('payments', col)) this.db.exec(`ALTER TABLE payments ADD COLUMN ${col} TEXT`)
     // Karma (0.6.0): who cast a vote, when they were signed in; review totals beside the vote count.
     if (!has('votes', 'user_id')) this.db.exec('ALTER TABLE votes ADD COLUMN user_id TEXT')
+    // The Adult (18+) category (0.10.0): explicit, so it is a column; every other category is read from the listing's words.
+    if (!has('products', 'category')) this.db.exec('ALTER TABLE products ADD COLUMN category TEXT')
     for (const col of ['review_count', 'review_sum']) if (!has('products', col)) this.db.exec(`ALTER TABLE products ADD COLUMN ${col} INTEGER NOT NULL DEFAULT 0`)
     this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS payments_session ON payments(checkout_session_id) WHERE checkout_session_id IS NOT NULL')
     this.backfillTags()
@@ -316,6 +325,7 @@ export class Store {
       claimedAt: row.claimed_at,
       submitterUser: row.submitter_user,
       status: row.status,
+      category: row.category ?? null,
       votes: row.votes,
       reviews: row.review_count ?? 0,
       rating: row.review_count ? Math.round((row.review_sum / row.review_count) * 10) / 10 : null,
@@ -362,13 +372,13 @@ export class Store {
     return slug
   }
 
-  create(p: Omit<Product, 'votes' | 'reviews' | 'rating' | 'verifiedAt' | 'featuredUntil' | 'launchedAt' | 'createdAt' | 'updatedAt' | 'makerId' | 'makerVerified' | 'ownerId' | 'claimedAt'>, submitter: string, now = Date.now()): Product {
+  create(p: Omit<Product, 'votes' | 'reviews' | 'rating' | 'verifiedAt' | 'featuredUntil' | 'launchedAt' | 'createdAt' | 'updatedAt' | 'makerId' | 'makerVerified' | 'ownerId' | 'claimedAt' | 'category'> & { category?: string | null }, submitter: string, now = Date.now()): Product {
     this.db
       .query(
-        `INSERT INTO products (id, slug, url, url_key, domain, name, tagline, description, logo, og_image, screenshot, images, videos, socials, tags, theme_color, llms, profile, record, extras, maker_name, maker_profile, status, submitter_user, submitter, launched_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO products (id, slug, url, url_key, domain, name, tagline, description, logo, og_image, screenshot, images, videos, socials, tags, theme_color, llms, profile, record, extras, maker_name, maker_profile, status, category, submitter_user, submitter, launched_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(p.id, p.slug, p.url, Store.urlKey(p.url), p.domain, p.name, p.tagline, p.description, p.logo, p.ogImage, p.screenshot, JSON.stringify(p.images), JSON.stringify(p.videos), JSON.stringify(p.socials), JSON.stringify(p.tags), p.themeColor, p.llms ? JSON.stringify(p.llms) : null, p.profile ? JSON.stringify(p.profile) : null, p.record ? JSON.stringify(p.record) : null, JSON.stringify(p.extras), p.makerName, p.makerProfile, p.status, p.submitterUser, submitter, p.status === 'live' ? now : null, now, now)
+      .run(p.id, p.slug, p.url, Store.urlKey(p.url), p.domain, p.name, p.tagline, p.description, p.logo, p.ogImage, p.screenshot, JSON.stringify(p.images), JSON.stringify(p.videos), JSON.stringify(p.socials), JSON.stringify(p.tags), p.themeColor, p.llms ? JSON.stringify(p.llms) : null, p.profile ? JSON.stringify(p.profile) : null, p.record ? JSON.stringify(p.record) : null, JSON.stringify(p.extras), p.makerName, p.makerProfile, p.status, p.category ?? null, p.submitterUser, submitter, p.status === 'live' ? now : null, now, now)
     return this.product(p.id)!
   }
 
@@ -429,7 +439,7 @@ export class Store {
   publicName(userId: string): string {
     const u = this.user(userId)
     if (u?.displayName) return u.displayName
-    const p = this.db.query("SELECT name FROM products WHERE (owner_id = ? OR (owner_id IS NULL AND submitter_user = ?)) AND status = 'live' ORDER BY votes DESC LIMIT 1").get(userId, userId) as { name: string } | null
+    const p = this.db.query(`SELECT name FROM products WHERE (owner_id = ? OR (owner_id IS NULL AND submitter_user = ?)) AND ${PUBLIC} ORDER BY votes DESC LIMIT 1`).get(userId, userId) as { name: string } | null
     return p ? `Maker of ${p.name}` : `Member ${userId.slice(0, 4)}`
   }
 
@@ -639,8 +649,8 @@ export class Store {
   }
 
   /** Change what the maker may change. Only known columns; JSON for the lists. */
-  update(id: string, patch: Partial<Pick<Product, 'name' | 'tagline' | 'description' | 'logo' | 'ogImage' | 'screenshot' | 'images' | 'videos' | 'socials' | 'tags' | 'themeColor' | 'llms' | 'profile' | 'record' | 'extras' | 'makerName' | 'makerProfile' | 'makerId' | 'makerVerified' | 'status' | 'url' | 'domain'>>, now = Date.now()): Product | null {
-    const cols: Record<string, string> = { name: 'name', tagline: 'tagline', description: 'description', logo: 'logo', ogImage: 'og_image', screenshot: 'screenshot', images: 'images', videos: 'videos', socials: 'socials', tags: 'tags', themeColor: 'theme_color', llms: 'llms', profile: 'profile', record: 'record', extras: 'extras', makerName: 'maker_name', makerProfile: 'maker_profile', makerId: 'maker_id', makerVerified: 'maker_verified', status: 'status', url: 'url', domain: 'domain' }
+  update(id: string, patch: Partial<Pick<Product, 'name' | 'tagline' | 'description' | 'logo' | 'ogImage' | 'screenshot' | 'images' | 'videos' | 'socials' | 'tags' | 'themeColor' | 'llms' | 'profile' | 'record' | 'extras' | 'makerName' | 'makerProfile' | 'makerId' | 'makerVerified' | 'status' | 'url' | 'domain' | 'category'>>, now = Date.now()): Product | null {
+    const cols: Record<string, string> = { name: 'name', tagline: 'tagline', description: 'description', logo: 'logo', ogImage: 'og_image', screenshot: 'screenshot', images: 'images', videos: 'videos', socials: 'socials', tags: 'tags', themeColor: 'theme_color', llms: 'llms', profile: 'profile', record: 'record', extras: 'extras', makerName: 'maker_name', makerProfile: 'maker_profile', makerId: 'maker_id', makerVerified: 'maker_verified', status: 'status', url: 'url', domain: 'domain', category: 'category' }
     const sets: string[] = []
     const values: (string | number | null)[] = []
     for (const [k, v] of Object.entries(patch)) {
@@ -683,45 +693,55 @@ export class Store {
   list(window: Window = 'today', limit = 30, offset = 0, now = Date.now()): Product[] {
     const day = 86400_000
     const since = { today: startOfDay(now), week: now - 7 * day, month: now - 30 * day, all: 0, new: 0, featured: 0 }[window]
-    const where = window === 'featured' ? "status = 'live' AND featured_until > ?" : "status = 'live' AND launched_at >= ?"
+    const where = window === 'featured' ? `${PUBLIC} AND featured_until > ?` : `${PUBLIC} AND launched_at >= ?`
     const order = window === 'new' ? 'launched_at DESC' : 'votes DESC, launched_at ASC'
     return (this.db.query(`SELECT * FROM products WHERE ${where} ORDER BY ${order} LIMIT ? OFFSET ?`).all(window === 'featured' ? now : since, limit, offset) as any[]).map((r) => this.toProduct(r)!)
   }
 
   onDay(day: string, limit = 50): Product[] {
     const from = Date.parse(`${day}T00:00:00Z`)
-    return (this.db.query("SELECT * FROM products WHERE status = 'live' AND launched_at >= ? AND launched_at < ? ORDER BY votes DESC, launched_at ASC LIMIT ?").all(from, from + 86400_000, limit) as any[]).map((r) => this.toProduct(r)!)
+    return (this.db.query(`SELECT * FROM products WHERE ${PUBLIC} AND launched_at >= ? AND launched_at < ? ORDER BY votes DESC, launched_at ASC LIMIT ?`).all(from, from + 86400_000, limit) as any[]).map((r) => this.toProduct(r)!)
   }
 
-  byMaker(makerId: string): Product[] {
-    return (this.db.query("SELECT * FROM products WHERE maker_id = ? AND status = 'live' ORDER BY launched_at DESC").all(makerId) as any[]).map((r) => this.toProduct(r)!)
+  /** A maker's public listings; `adult` asks for their Adult (18+) ones instead (signed-in members only). */
+  byMaker(makerId: string, adult = false): Product[] {
+    return (this.db.query(`SELECT * FROM products WHERE maker_id = ? AND ${adult ? "status = 'live' AND category = 'adult'" : PUBLIC} ORDER BY launched_at DESC`).all(makerId) as any[]).map((r) => this.toProduct(r)!)
   }
 
   search(q: string, limit = 30): Product[] {
     const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`
-    return (this.db.query("SELECT * FROM products WHERE status = 'live' AND (name LIKE ? ESCAPE '\\' OR tagline LIKE ? ESCAPE '\\' OR domain LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\') ORDER BY votes DESC LIMIT ?").all(like, like, like, like, limit) as any[]).map((r) => this.toProduct(r)!)
+    return (this.db.query("SELECT * FROM products WHERE status = 'live' AND category IS NOT 'adult' AND (name LIKE ? ESCAPE '\\' OR tagline LIKE ? ESCAPE '\\' OR domain LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\') ORDER BY votes DESC LIMIT ?").all(like, like, like, like, limit) as any[]).map((r) => this.toProduct(r)!)
   }
 
   /** Live products with this exact tag, best first. */
   byTag(tag: string, limit = 50): Product[] {
-    return (this.db.query("SELECT p.* FROM products p WHERE p.status = 'live' AND EXISTS (SELECT 1 FROM json_each(p.tags) WHERE value = ?) ORDER BY p.votes DESC, p.launched_at DESC LIMIT ?").all(tag, limit) as any[]).map((r) => this.toProduct(r)!)
+    return (this.db.query("SELECT p.* FROM products p WHERE p.status = 'live' AND p.category IS NOT 'adult' AND EXISTS (SELECT 1 FROM json_each(p.tags) WHERE value = ?) ORDER BY p.votes DESC, p.launched_at DESC LIMIT ?").all(tag, limit) as any[]).map((r) => this.toProduct(r)!)
   }
 
   /** Every tag on a live product, with how many carry it; most used first. */
   tagCounts(limit = 200): { tag: string; count: number }[] {
-    return this.db.query("SELECT t.value AS tag, COUNT(*) AS count FROM products p, json_each(p.tags) t WHERE p.status = 'live' GROUP BY t.value ORDER BY count DESC, tag LIMIT ?").all(limit) as { tag: string; count: number }[]
+    return this.db.query("SELECT t.value AS tag, COUNT(*) AS count FROM products p, json_each(p.tags) t WHERE p.status = 'live' AND p.category IS NOT 'adult' GROUP BY t.value ORDER BY count DESC, tag LIMIT ?").all(limit) as { tag: string; count: number }[]
   }
-  /** Every live launch, for browse.ts to filter and count. Cached until something changes. */
+  /** Every public live launch, for browse.ts to filter and count. Cached until something changes. Adult (18+) listings are never in it. */
   allLive(): Product[] {
-    const stamp = this.db.query("SELECT COUNT(*) AS n, MAX(updated_at) AS u, SUM(votes) AS v, SUM(COALESCE(featured_until, 0)) AS f, COUNT(verified_at) AS c, SUM(review_count) AS rc, SUM(review_sum) AS rs FROM products WHERE status = 'live'").get() as Record<string, number | null>
+    const stamp = this.db.query("SELECT COUNT(*) AS n, MAX(updated_at) AS u, SUM(votes) AS v, SUM(COALESCE(featured_until, 0)) AS f, COUNT(verified_at) AS c, SUM(review_count) AS rc, SUM(review_sum) AS rs FROM products WHERE status = 'live' AND category IS NOT 'adult'").get() as Record<string, number | null>
     const key = `${stamp.n}:${stamp.u}:${stamp.v}:${stamp.f}:${stamp.c}:${stamp.rc}:${stamp.rs}`
-    if (this.liveCache?.key !== key) this.liveCache = { key, products: (this.db.query("SELECT * FROM products WHERE status = 'live'").all() as any[]).map((r) => this.toProduct(r)!) }
+    if (this.liveCache?.key !== key) this.liveCache = { key, products: (this.db.query("SELECT * FROM products WHERE status = 'live' AND category IS NOT 'adult'").all() as any[]).map((r) => this.toProduct(r)!) }
     return this.liveCache.products
   }
   private liveCache: { key: string; products: Product[] } | null = null
 
+  /** Every live Adult (18+) listing: the adult category page and an explicit category=adult search read this, for signed-in members only. */
+  adultLive(): Product[] {
+    return (this.db.query("SELECT * FROM products WHERE status = 'live' AND category = 'adult'").all() as any[]).map((r) => this.toProduct(r)!)
+  }
+
+  adultCount(): number {
+    return (this.db.query("SELECT COUNT(*) AS n FROM products WHERE status = 'live' AND category = 'adult'").get() as { n: number }).n
+  }
+
   count(): { products: number; votes: number } {
-    return this.db.query("SELECT (SELECT COUNT(*) FROM products WHERE status = 'live') AS products, (SELECT COUNT(*) FROM votes) AS votes").get() as { products: number; votes: number }
+    return this.db.query("SELECT (SELECT COUNT(*) FROM products WHERE status = 'live' AND category IS NOT 'adult') AS products, (SELECT COUNT(*) FROM votes v WHERE NOT EXISTS (SELECT 1 FROM products a WHERE a.id = v.product_id AND a.category = 'adult')) AS votes").get() as { products: number; votes: number }
   }
 
   /** #1 of its launch day, once that day is over. */
