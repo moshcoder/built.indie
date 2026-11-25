@@ -246,6 +246,18 @@ export function createApp(deps: Deps) {
   app.use('/api/v1/products/:slug', adultListingGate)
   app.use('/api/v1/products/:slug/*', adultListingGate)
 
+  /**
+   * A member with no chosen name is shown as "Maker of <their best public listing>", and the board
+   * keeps every member's label for a while. Anything written to a listing (moved into or out of
+   * Adult (18+), renamed, published, claimed, taken down, deleted) can change that label, so the
+   * board forgets what it holds and the next read names everyone afresh from public listings.
+   */
+  const listingWritten = async (c: Context, next: () => Promise<void>) => {
+    await next()
+    if (c.req.method !== 'GET' && c.req.method !== 'HEAD') board.invalidate()
+  }
+  for (const path of ['/submit', '/p/*', '/api/v1/products', '/api/v1/products/*']) app.use(path, listingWritten)
+
   // Static files.
   const TYPES: Record<string, string> = { css: 'text/css; charset=utf-8', js: 'text/javascript; charset=utf-8', svg: 'image/svg+xml', png: 'image/png', crt: 'application/x-x509-ca-cert', webmanifest: 'application/manifest+json' }
   app.get('/:file{(style\\.css|app\\.js|sw\\.js|favicon\\.svg|icon-192\\.png|icon-512\\.png|manifest\\.webmanifest|moshpit-root-ca\\.crt)}', async (c) => {
@@ -697,8 +709,21 @@ export function createApp(deps: Deps) {
     const period = (await rowsOf(which, 'week', 1)).length ? 'week' : 'all'
     return page(c, leaderboardPage(ctxOf(c), { board: which, period, featureDays: config.featureDays, featureUsd: config.featureUsd, perCredit: service.karma.perCredit, howToEarn: HOW_TO_EARN, me: user?.id ?? null }))
   })
-  app.use('/leaderboard.json', leaderboard(board))
-  app.use('/leaderboard/*', leaderboard(board))
+  // What the package serves carries members' labels: a shared cache must ask us again rather than keep a label a listing no longer gives.
+  const boardRoutes = leaderboard(board)
+  const boardFresh = async (c: Context, next: () => Promise<void>) => {
+    const r = await boardRoutes(c, next)
+    const out = r ?? c.res
+    if (out && !c.req.path.endsWith('/embed.js')) {
+      const fresh = new Response(out.body, out)
+      fresh.headers.set('cache-control', 'no-cache')
+      if (r) return fresh
+      c.res = fresh
+    }
+    return r
+  }
+  app.use('/leaderboard.json', boardFresh)
+  app.use('/leaderboard/*', boardFresh)
 
   app.post('/p/:slug/vote', (c) => {
     const p = live(c.req.param('slug'))

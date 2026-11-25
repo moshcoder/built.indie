@@ -359,4 +359,33 @@ describe('staff', () => {
     expect(sent[0]!.text).toContain('/c/adult')
     expect(sent[0]!.text).not.toContain('Share it to climb')
   })
+
+  test('moving a listing into Adult (18+) takes its name off every "Maker of" label at once, and moving it back restores it', async () => {
+    const { call, signIn, store } = setup()
+    const cookie = await signIn('maker@example.com')
+    await call('/submit', form({ url: 'acme.test' }, { cookie }))
+    await call('/p/acme/edit', form({ action: 'publish', name: 'Acme' }, { cookie }))
+    const id = store.userByEmail('maker@example.com')!.id
+    // Launching paid karma, so the member is on the board, named after their listing.
+    const named = ['/', '/leaderboard/karma.json?period=all', `/leaderboard/u/${id}`, '/api/v1/leaderboard?period=all', '/leaderboard/karma.xml?period=all']
+    for (const path of named) expect(`${path} ${(await (await call(path)).text()).includes('Maker of Acme')}`).toBe(`${path} true`)
+    // A comment by them on someone else's listing carries the same label.
+    await call('/submit', form({ url: 'plum.test' }))
+    await call('/p/plum/comments', form({ body: 'A comment long enough to count.' }, { cookie }))
+    expect(await (await call('/p/plum')).text()).toContain('Maker of Acme')
+
+    expect((await call('/api/v1/products/acme', json({ category: 'adult' }, ADMIN, 'PATCH'))).status).toBe(200)
+    for (const path of [...named, '/p/plum', '/leaderboard', '/api/v1/products/plum/comments']) {
+      const r = await call(path)
+      expect(`${path} ${/Acme/.test(await r.text())}`).toBe(`${path} false`)
+    }
+    // Nothing the board serves may sit in a shared cache holding the old label.
+    for (const path of ['/leaderboard/karma.json?period=all', `/leaderboard/u/${id}`, '/leaderboard/karma.xml?period=all']) expect(`${path} ${(await call(path)).headers.get('cache-control')}`).toBe(`${path} no-cache`)
+
+    expect((await call('/api/v1/products/acme', json({ category: null }, ADMIN, 'PATCH'))).status).toBe(200)
+    expect(await (await call('/')).text()).toContain('Maker of Acme')
+    // The bulk-import path (staff re-posting a live URL with the category) moves it too, and the label follows.
+    await call('/api/v1/products', json({ url: 'acme.test', category: 'adult' }, ADMIN))
+    expect(await (await call('/')).text()).not.toContain('Acme')
+  })
 })
