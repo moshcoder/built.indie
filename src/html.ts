@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import type { InviteStats, Maker, Product, Review, User, Window } from './db.js'
 import type { KarmaSummary } from './karma.js'
-import { categorize, CATEGORY_LABELS, FACETS, isEmpty, queryString, SORTS, toggle, type Query, type Result } from './browse.js'
+import { ADULT, ADULT_LABEL, categorize, CATEGORY_LABELS, FACETS, isAdult, isEmpty, queryString, SORTS, toggle, type Query, type Result } from './browse.js'
 import { pitFooter } from './pit-footer.js'
 import { RING_PLACEHOLDER } from './ring.js'
 import { ringFooter, ringFooterOptions, setRingFooterOptions } from './ring-footer.js'
@@ -61,7 +61,7 @@ const LOGO = `<svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><path d="
 
 export type Ctx = { origin: string; user?: User | null; voted?: (id: string) => boolean; /** Sign in with CoinPay is on. */ coinpay?: boolean }
 
-type LayoutOptions = { title: string; description: string; path: string; body: string; ctx: Ctx; noindex?: boolean; image?: string | null; head?: string; ads?: boolean; wide?: boolean; q?: string }
+type LayoutOptions = { title: string; description: string; path: string; body: string; ctx: Ctx; noindex?: boolean; /** An Adult (18+) page: noindex, nofollow, no ads, no card image. */ adult?: boolean; image?: string | null; head?: string; ads?: boolean; wide?: boolean; q?: string }
 
 function layout(o: LayoutOptions): string {
   const url = o.ctx.origin + o.path
@@ -77,11 +77,11 @@ function layout(o: LayoutOptions): string {
 <meta property="og:title" content="${esc(o.title)}">
 <meta property="og:description" content="${esc(o.description)}">
 <meta property="og:url" content="${esc(url)}">
-${o.image ? `<meta property="og:image" content="${esc(o.image)}"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:image" content="${esc(o.image)}">` : '<meta name="twitter:card" content="summary">'}
+${o.image && !o.adult ? `<meta property="og:image" content="${esc(o.image)}"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:image" content="${esc(o.image)}">` : '<meta name="twitter:card" content="summary">'}
 <meta name="referrer" content="strict-origin-when-cross-origin">
 <meta name="color-scheme" content="dark light">
 <meta name="theme-color" content="#0b0a10">
-${o.noindex ? '<meta name="robots" content="noindex">' : `<link rel="canonical" href="${esc(url)}">`}
+${o.adult ? '<meta name="robots" content="noindex, nofollow">' : o.noindex ? '<meta name="robots" content="noindex">' : `<link rel="canonical" href="${esc(url)}">`}
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/icon-192.png">
 <link rel="manifest" href="/manifest.webmanifest">
@@ -118,7 +118,7 @@ ${RING_PLACEHOLDER}
   </nav>
 </header>
 <main${o.wide ? ' class="wide"' : ''}>
-${o.ads ? adUnit() : ''}
+${o.ads && !o.adult ? adUnit() : ''}
 ${o.body}
 </main>
 ${ringFooter(o.path)}
@@ -163,9 +163,10 @@ const board = (ctx: Ctx, products: Product[], ranked = true) => (products.length
 
 function submitForm(compact = false, values: Record<string, string> = {}, error?: { message: string; field?: string }): string {
   return `<form class="submit-form${compact ? ' compact' : ''}" method="post" action="/submit" toolname="launch_product" tooldescription="Fill in the launch form with a product's homepage URL (and optional maker name / OpenProfile URL); the person presses Launch it" data-busy="Reading the homepage, llms.txt and manifest, saving the logo and screenshots…">
-  ${error ? `<p class="note error" role="alert">${esc(error.message)}</p>` : ''}
+  ${error ? `<p class="note error" role="alert">${esc(error.message)}${error.field === 'category' ? ` <a href="/login?next=${enc('/submit')}">Sign in</a>` : ''}</p>` : ''}
   <label for="url"${compact ? ' class="sr"' : ''}>Your product’s URL</label>
   <div class="url-row"><input id="url" name="url" type="text" inputmode="url" autocomplete="url" placeholder="yourproduct.com" required value="${esc(values.url ?? '')}"${error?.field === 'url' ? ' aria-invalid="true"' : ''}><button class="btn">Launch it</button></div>
+  ${compact ? '' : `<label class="check" for="category"><input id="category" name="category" type="checkbox" value="${ADULT}"${values.category === ADULT ? ' checked' : ''}${error?.field === 'category' ? ' aria-invalid="true"' : ''}> This is an adult site: list it in ${ADULT_LABEL} <span class="muted">(needs an account; shown to signed-in members only)</span></label>`}
   ${compact ? '' : `<details${values.makerName || values.makerProfile ? ' open' : ''}><summary>Who made it? <span class="muted">(optional)</span></summary>
     <label for="makerName">Your name</label><input id="makerName" name="makerName" maxlength="60" value="${esc(values.makerName ?? '')}">
     <label for="makerProfile">Your OpenProfile.md <span class="muted">URL, e.g. yoursite.com/.well-known/openprofile.md (<a href="https://logicsrc.com/openprofile">what is it?</a>)</span></label><input id="makerProfile" name="makerProfile" type="text" inputmode="url" value="${esc(values.makerProfile ?? '')}"${error?.field === 'makerProfile' ? ' aria-invalid="true"' : ''}>
@@ -313,7 +314,7 @@ function pager(r: Result): string {
  * /search takes any combination; /c/<category> and /t/<tag> are the same page
  * for one filter, under an address worth indexing.
  */
-export function browsePage(ctx: Ctx, r: Result, d: { path: string; heading?: string; intro?: string } = { path: '/search' }): string {
+export function browsePage(ctx: Ctx, r: Result, d: { path: string; heading?: string; intro?: string; /** The Adult (18+) category: members only. */ adult?: boolean; notice?: string } = { path: '/search' }): string {
   const q = r.query
   const what = r.chips.map((c) => c.label).join(' · ')
   const heading = d.heading ?? (isEmpty(q) ? 'Browse every launch' : q.q && r.chips.length === 1 ? `Search: ${q.q}` : what)
@@ -330,6 +331,7 @@ export function browsePage(ctx: Ctx, r: Result, d: { path: string; heading?: str
     path: d.path,
     // Filter combinations are endless; only the plain pages are worth indexing.
     noindex: d.path === '/search' && !isEmpty(q),
+    adult: d.adult,
     ads: true,
     wide: true,
     q: q.q,
@@ -346,6 +348,7 @@ export function browsePage(ctx: Ctx, r: Result, d: { path: string; heading?: str
       .map((s) => `<option value="${s}"${q.sort === s ? ' selected' : ''}>${esc(SORTS[s])}</option>`)
       .join('')}</select><noscript><button class="chip">Sort</button></noscript></form>
   </header>
+  ${d.notice ? `<p class="note" role="note">${esc(d.notice)}</p>` : ''}
   ${chipsHtml(r)}
   ${board(ctx, r.products, false) || `<p class="empty">Nothing matches all of that. Remove a filter, or <a href="/search">start over</a>.${q.q ? ` Or <a href="/submit?url=${enc(q.q)}">launch it</a> if it is yours.` : ''}</p>`}
   ${pager(r)}
@@ -473,6 +476,8 @@ export function productPage(ctx: Ctx, d: { comments?: CommentView[]; reviews?: R
   const rel = p.verifiedAt ? 'noopener' : 'noopener nofollow ugc'
   const live = p.status === 'live'
   const awardText = d.award ? `#${d.award.rank} Product of the day · ${d.award.day}` : ''
+  // An Adult (18+) listing: members only, never indexed, no ads, no share buttons, no Featured slot.
+  const adult = isAdult(p)
   return layout({
     ctx,
     title: `${p.name}: ${p.tagline || p.domain} · built.indie`,
@@ -480,6 +485,7 @@ export function productPage(ctx: Ctx, d: { comments?: CommentView[]; reviews?: R
     path: `/p/${p.slug}`,
     image: cardImage(ctx.origin, p),
     noindex: !live,
+    adult,
     ads: live,
     head: `<link rel="opensite" href="/p/${esc(p.slug)}/opensite.json"><link rel="alternate" type="text/markdown" title="OpenProfile" href="/p/${esc(p.slug)}/openprofile.md">${live ? productJsonLd(ctx.origin, p, d.reviews ?? []) : ''}`,
     body: `${d.error ? `<p class="note error" role="alert">${esc(d.error)}</p>` : ''}${d.launched && live ? `<div class="note launched"><b>🚀 ${esc(p.name)} is live.</b> Today’s board resets at midnight UTC: share it now. ${p.ownerId ? '' : `Is it yours? <a href="/p/${esc(p.slug)}/claim">Claim it</a> with your badge (or a DNS record) to edit it and get the ✓.`}</div>` : ''}
@@ -504,7 +510,7 @@ ${shots.length ? `<div class="gallery">${shots.map((f, i) => `<a href="${esc(med
 ${p.videos.length ? `<div class="videos">${p.videos.map((v) => (v.embed ? `<div class="video"><iframe src="${esc(v.embed)}" title="${esc(p.name)} video" loading="lazy" allow="fullscreen; picture-in-picture" allowfullscreen referrerpolicy="strict-origin-when-cross-origin" sandbox="allow-scripts allow-same-origin allow-popups allow-presentation"></iframe></div>` : `<p><a href="${esc(v.url)}" rel="nofollow noopener" target="_blank">▶ Watch the video</a></p>`)).join('')}</div>` : ''}
 <div class="card">
   ${p.description ? `<p class="desc">${esc(p.description)}</p>` : ''}
-  <p class="tags">${categorize(p).map((c) => `<a class="tag cat" href="/c/${esc(c)}">${esc(CATEGORY_LABELS[c])}</a>`).join('')}${p.tags.map((t) => `<a class="tag" href="/t/${enc(t)}">${esc(t)}</a>`).join('')}</p>
+  <p class="tags">${categorize(p).map((c) => `<a class="tag cat" href="/c/${esc(c)}">${esc(CATEGORY_LABELS[c])}</a>`).join('')}${p.tags.map((t) => `<a class="tag" href="${adult ? `/search?category=${ADULT}&amp;tag=${enc(t)}` : `/t/${enc(t)}`}">${esc(t)}</a>`).join('')}</p>
   ${Object.keys(p.socials).length ? `<p class="socials">${Object.entries(p.socials).map(([k, v]) => `<a class="chip" href="${esc(v)}" rel="nofollow noopener" target="_blank">${icon(SOCIAL_ICONS[k] ?? 'globe')} ${esc(SOCIAL_LABELS[k] ?? k)}</a>`).join('')}</p>` : ''}
   ${stackHtml(p)}
   ${pricingHtml(p)}
@@ -513,7 +519,7 @@ ${p.videos.length ? `<div class="videos">${p.videos.map((v) => (v.embed ? `<div 
 </div>
 ${live ? `${reviewsHtml(ctx, p, d.reviews ?? [], d.myReview ?? null, Boolean(d.selfListing))}
 ${commentsHtml(ctx, p, d.comments ?? [])}
-<h2 class="section-h">Share it</h2>${share(ctx.origin, p)}
+${adult ? '' : `<h2 class="section-h">Share it</h2>${share(ctx.origin, p)}`}
 <details class="card" id="badge" open>
   <summary>Add the badge to your site</summary>
   <p class="muted">The wide badge shows your live upvote count. The square built.indie icon below links to this listing. Add either one to your site.</p>
@@ -526,7 +532,7 @@ ${commentsHtml(ctx, p, d.comments ?? [])}
   <pre><code>${esc(badgeSnippet(ctx.origin, p, 'square'))}</code></pre>
   <div class="row"><button class="chip" data-copy="${esc(badgeSnippet(ctx.origin, p, 'square'))}">Copy square icon HTML</button><form method="post" action="/p/${esc(p.slug)}/verify"><button class="chip">I added it: check</button></form></div>
 </details>
-${d.payments || d.canEdit ? `<details class="card" id="feature"${d.canEdit && (d.credits || d.daysBalance) ? ' open' : ''}><summary>Feature it: ${esc(`$${d.featureUsd}`)} for ${d.featureDays} days, or free with an invite</summary>
+${!adult && (d.payments || d.canEdit) ? `<details class="card" id="feature"${d.canEdit && (d.credits || d.daysBalance) ? ' open' : ''}><summary>Feature it: ${esc(`$${d.featureUsd}`)} for ${d.featureDays} days, or free with an invite</summary>
   <p class="muted">Pinned above today’s board on the homepage for ${d.featureDays} days.</p>
   ${d.canEdit && d.credits ? `<form method="post" action="/p/${esc(p.slug)}/credit" class="row"><button class="btn">${icon('star')} Use a free invite credit</button><span class="muted small">${d.credits} left</span></form>` : `<p class="muted small">Free: ${esc(inviteOffer(d.featureDays, d.featureUsd))} <a href="/invite">Get your invite link</a>.</p>`}
   ${d.canEdit && d.daysBalance ? featureDaysForm(p, d.daysBalance) : ''}
@@ -795,13 +801,14 @@ ${(d.webhooks ?? []).length ? `<ul class="hooks">${(d.webhooks ?? []).map((w) =>
 <p class="muted small">Also from the CLI (<code>builtindie webhooks</code>), MCP (<code>create_webhook</code>) and <code>/api/v1/webhooks</code>.</p></div>`
 }
 
-export function makerPage(ctx: Ctx, d: { maker: Maker; products: Product[] }): string {
+export function makerPage(ctx: Ctx, d: { maker: Maker; products: Product[]; adult?: boolean }): string {
   const m = d.maker
   return layout({
     ctx,
     title: `${m.name} · built.indie`,
     description: m.headline || `What ${m.name} launched on built.indie`,
     path: `/makers/${m.id}`,
+    adult: d.adult,
     ads: true,
     head: `<link rel="alternate" type="text/markdown" title="OpenProfile" href="/makers/${esc(m.id)}/openprofile.md">`,
     body: `<section class="payee"><h1>${esc(m.name)}</h1><p class="lede">${esc(m.headline)}</p>
@@ -830,6 +837,7 @@ curl ${o}/api/v1/products?tag=game          # one tag
 curl ${o}/api/v1/tags                       # every tag with its count
 curl '${o}/api/v1/search?q=crm&amp;category=ai&amp;tag=productivity&amp;has=verified&amp;sort=new'   # + facets with counts
 curl ${o}/api/v1/categories                 # every category and tag, with counts
+curl '${o}/api/v1/products?category=adult&amp;window=new' -H 'authorization: Bearer bi_…'   # Adult (18+): members only, and only when asked for
 curl ${o}/api/v1/products/&lt;slug&gt;
 curl -X POST ${o}/api/v1/products/&lt;slug&gt;/vote
 curl -X POST ${o}/api/v1/preview -d '{"url":"any.site"}' -H 'content-type: application/json'
@@ -1048,7 +1056,7 @@ export function badgeSvg(p: Product, award: { day: string; rank: number } | null
   const accent = '#ff5c39'
   const top = award ? `#${award.rank} PRODUCT OF THE DAY` : 'LAUNCHED ON'
   const count = String(p.votes)
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="44" viewBox="0 0 200 44" role="img" aria-label="${esc(p.name)}: ${esc(top.toLowerCase())} built.indie, ${count} upvotes">
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="44" viewBox="0 0 200 44" role="img" aria-label="${isAdult(p) ? '' : `${esc(p.name)}: `}${esc(top.toLowerCase())} built.indie, ${count} upvotes">
 <rect x=".5" y=".5" width="199" height="43" rx="9" fill="${bg}" stroke="${accent}"/>
 <path d="M22 9 12 21h6v12h8V21h6z" fill="${accent}"/>
 <text x="42" y="18" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="8.5" font-weight="700" letter-spacing=".6" fill="${sub}">${esc(top)}</text>

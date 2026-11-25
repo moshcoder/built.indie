@@ -75,16 +75,17 @@ export class BuiltIndieClient {
     return data as T
   }
 
-  launch(url: string, o: { makerName?: string; makerProfile?: string; name?: string; tagline?: string; description?: string; tags?: string[]; videos?: string[]; publish?: boolean } = {}): Promise<Launched> {
-    return this.call('POST', '/api/v1/products', { url, maker_name: o.makerName, maker_profile: o.makerProfile, name: o.name, tagline: o.tagline, description: o.description, tags: o.tags, videos: o.videos, publish: o.publish ?? true })
+  launch(url: string, o: { makerName?: string; makerProfile?: string; name?: string; tagline?: string; description?: string; tags?: string[]; videos?: string[]; publish?: boolean; /** 'adult': the Adult (18+) category (needs a key). */ category?: string } = {}): Promise<Launched> {
+    return this.call('POST', '/api/v1/products', { url, maker_name: o.makerName, maker_profile: o.makerProfile, name: o.name, tagline: o.tagline, description: o.description, tags: o.tags, videos: o.videos, publish: o.publish ?? true, ...(o.category ? { category: o.category } : {}) })
   }
 
   preview(url: string): Promise<Record<string, unknown>> {
     return this.call('POST', '/api/v1/preview', { url })
   }
 
-  list(window = 'today', limit = 30): Promise<{ window: string; products: ApiProduct[] }> {
-    return this.call('GET', `/api/v1/products?window=${encodeURIComponent(window)}&limit=${limit}`)
+  /** `category: 'adult'` lists the Adult (18+) category instead: it needs a key, and is the only way those listings come back. */
+  list(window = 'today', limit = 30, category?: string): Promise<{ window: string; products: ApiProduct[] }> {
+    return this.call('GET', `/api/v1/products?window=${encodeURIComponent(window)}&limit=${limit}${category ? `&category=${encodeURIComponent(category)}` : ''}`)
   }
 
   tags(): Promise<{ tags: { tag: string; count: number }[] }> {

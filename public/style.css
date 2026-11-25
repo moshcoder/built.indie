@@ -265,3 +265,7 @@ table.earn td.pts { color: var(--gold); font-weight: 700; white-space: nowrap; }
 .pfs-profile { border: 0; margin: 0; padding: 0; min-width: 0; }
 .pfs-profile__optional { color: var(--muted); font-weight: 400; }
 .pfs-profile__error { color: var(--fail); font-size: 0.85rem; margin: 0.25rem 0 0; }
+
+/* A checkbox with its sentence beside it (the Adult (18+) choice on the launch form). */
+label.check{display:flex;gap:.5rem;align-items:baseline;font-weight:400;margin:.6rem 0}
+label.check input{width:auto;flex:none}
